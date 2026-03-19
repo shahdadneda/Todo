@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>To-Do List | Shahdad Neda</title>
+    <meta
+      name="description"
+      content="A simple to-do list built with plain HTML, CSS, and JavaScript."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300..900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../fonts.css?v=1" />
+    <link rel="stylesheet" href="./style.css?v=1" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <main class="page" id="main-content">
+      <div class="page-top">
+        <a class="back-link" href="../index.html">back to&nbsp;&nbsp;<strong>home</strong></a>
+      </div>
+
+      <div class="todo-layout">
+        <aside class="section-sidebar" aria-label="Task sections">
+          <nav class="section-nav">
+            <button
+              class="section-link is-active"
+              type="button"
+              data-section="general"
+              aria-current="page"
+            >
+              General
+            </button>
+            <button class="section-link" type="button" data-section="weekend-goals">
+              Weekend Goals
+            </button>
+            <button class="section-link" type="button" data-section="ess-planner">
+              ESS planner
+            </button>
+          </nav>
+        </aside>
+
+        <section class="todo-card" aria-labelledby="todo-heading">
+          <div class="todo-header">
+            <div class="todo-heading-group">
+              <h2 id="todo-heading">General</h2>
+              <p class="todo-context is-hidden" id="todo-context"></p>
+            </div>
+          </div>
+
+          <div class="todo-body" id="todo-body">
+            <div class="task-area" id="task-area">
+	              <form class="todo-form" id="todo-form">
+	                <label class="sr-only" for="task-input">Add a new task</label>
+	                <input
+                  id="task-input"
+                  name="task"
+                  type="text"
+                  placeholder="What do you want to get done?"
+                  maxlength="120"
+	                  autocomplete="off"
+	                  required
+	                />
+	                <button type="submit">Add Task</button>
+	                <button
+	                  class="planner-archive-toggle todo-archive-toggle is-hidden"
+	                  id="todo-archive-toggle"
+	                  type="button"
+	                  aria-pressed="false"
+	                >
+	                  Archives
+	                </button>
+	              </form>
+
+              <p class="form-message" id="form-message" aria-live="polite"></p>
+
+              <ul class="task-list" id="task-list" aria-live="polite"></ul>
+
+              <div class="empty-state" id="empty-state">
+                <p>No tasks yet. Add your first one above.</p>
+              </div>
+            </div>
+
+            <aside class="planner-shell is-hidden" id="planner-shell">
+              <div class="planner-toolbar">
+                <div class="planner-date-picker-shell" id="planner-date-picker-shell">
+                  <button
+                    class="planner-create-button"
+                    id="planner-create-button"
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    aria-controls="planner-date-picker"
+                  >
+                    New ESS Entry
+                  </button>
+
+                  <div
+                    class="planner-date-picker is-hidden"
+                    id="planner-date-picker"
+                    role="dialog"
+                    aria-label="Choose an ESS entry date"
+                    aria-hidden="true"
+                  >
+                    <div class="planner-date-picker-header">
+                      <p class="planner-date-picker-title" id="planner-date-picker-title" aria-live="polite"></p>
+                      <div class="planner-date-picker-nav">
+                        <button
+                          class="planner-date-picker-nav-button"
+                          type="button"
+                          data-calendar-nav="previous"
+                          aria-label="Previous month"
+                        >
+                          <span aria-hidden="true">&#8249;</span>
+                        </button>
+                        <button
+                          class="planner-date-picker-nav-button"
+                          type="button"
+                          data-calendar-nav="next"
+                          aria-label="Next month"
+                        >
+                          <span aria-hidden="true">&#8250;</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="planner-date-picker-weekdays" aria-hidden="true">
+                      <span>S</span>
+                      <span>M</span>
+                      <span>T</span>
+                      <span>W</span>
+                      <span>T</span>
+                      <span>F</span>
+                      <span>S</span>
+                    </div>
+
+                    <div class="planner-date-picker-grid" id="planner-date-picker-grid"></div>
+                  </div>
+                </div>
+
+                <button
+                  class="planner-archive-toggle is-hidden"
+                  id="planner-archive-toggle"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  Archives
+                </button>
+              </div>
+
+              <div class="planner-entry-list" id="planner-entry-list" aria-live="polite"></div>
+
+              <p class="planner-empty-message is-hidden" id="planner-empty-message"></p>
+            </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
