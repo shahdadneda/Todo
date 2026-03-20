@@ -1,5 +1,16 @@
 const express = require("express");
-const { createPlannerEntry, createTask, databasePath, getAppState, openDatabase } = require("./db");
+const {
+  createPlannerEntry,
+  createTask,
+  databasePath,
+  deletePlannerEntry,
+  deleteTask,
+  getAppState,
+  openDatabase,
+  setPlannerSelection,
+  updatePlannerEntry,
+  updateTask
+} = require("./db");
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -8,7 +19,7 @@ const db = openDatabase();
 
 app.use(function (request, response, next) {
   response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (request.method === "OPTIONS") {
@@ -63,6 +74,101 @@ app.post("/api/planner-entries", function (request, response) {
     console.error("Could not create planner entry.", error);
     response.status(500).json({
       error: "Could not create planner entry."
+    });
+  }
+});
+
+app.patch("/api/tasks/:taskId", function (request, response) {
+  try {
+    updateTask(db, request.params.taskId, request.body || {});
+    response.json(getAppState(db));
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not update task.", error);
+    response.status(500).json({
+      error: "Could not update task."
+    });
+  }
+});
+
+app.delete("/api/tasks/:taskId", function (request, response) {
+  try {
+    deleteTask(db, request.params.taskId);
+    response.json(getAppState(db));
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not delete task.", error);
+    response.status(500).json({
+      error: "Could not delete task."
+    });
+  }
+});
+
+app.patch("/api/planner-state", function (request, response) {
+  try {
+    setPlannerSelection(db, request.body || {});
+    response.json(getAppState(db));
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not update planner selection.", error);
+    response.status(500).json({
+      error: "Could not update planner selection."
+    });
+  }
+});
+
+app.patch("/api/planner-entries/:entryId", function (request, response) {
+  try {
+    updatePlannerEntry(db, request.params.entryId, request.body || {});
+    response.json(getAppState(db));
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not update planner entry.", error);
+    response.status(500).json({
+      error: "Could not update planner entry."
+    });
+  }
+});
+
+app.delete("/api/planner-entries/:entryId", function (request, response) {
+  try {
+    deletePlannerEntry(db, request.params.entryId);
+    response.json(getAppState(db));
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not delete planner entry.", error);
+    response.status(500).json({
+      error: "Could not delete planner entry."
     });
   }
 });

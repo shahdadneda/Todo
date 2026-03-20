@@ -178,6 +178,147 @@ function createPlannerEntry(db, plannerEntryInput) {
   return getPlannerEntryById(db, insertResult.lastInsertRowid);
 }
 
+function updateTask(db, taskId, taskInput) {
+  const normalizedTaskId = normalizePlannerEntryId(taskId);
+  const existingTask = db.prepare(`
+    SELECT id, section_key, planner_entry_id, completed, archived
+    FROM tasks
+    WHERE id = ?
+  `).get(normalizedTaskId);
+
+  if (!existingTask) {
+    throw createHttpError(404, "Task not found.");
+  }
+
+  const hasCompletedUpdate = typeof taskInput.completed === "boolean";
+  const hasArchivedUpdate = typeof taskInput.archived === "boolean";
+
+  if (!hasCompletedUpdate && !hasArchivedUpdate) {
+    throw createHttpError(400, "At least one valid task field is required.");
+  }
+
+  if (hasArchivedUpdate && existingTask.section_key !== "general") {
+    throw createHttpError(400, "Only General tasks can be archived.");
+  }
+
+  if (hasCompletedUpdate) {
+    reorderTaskScopeForCompletion(
+      db,
+      existingTask.section_key,
+      existingTask.planner_entry_id,
+      existingTask.id,
+      taskInput.completed
+    );
+  }
+
+  if (hasArchivedUpdate) {
+    db.prepare(`
+      UPDATE tasks
+      SET archived = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(taskInput.archived ? 1 : 0, existingTask.id);
+  }
+}
+
+function deleteTask(db, taskId) {
+  const normalizedTaskId = normalizePlannerEntryId(taskId);
+  const deleteResult = db.prepare(`
+    DELETE FROM tasks
+    WHERE id = ?
+  `).run(normalizedTaskId);
+
+  if (deleteResult.changes === 0) {
+    throw createHttpError(404, "Task not found.");
+  }
+}
+
+function setPlannerSelection(db, selectionInput) {
+  const sectionKey = typeof selectionInput.sectionKey === "string" ? selectionInput.sectionKey : "";
+  const activeEntryId = normalizePlannerEntryId(selectionInput.activeEntryId);
+
+  if (!["weekend-goals", "ess-planner"].includes(sectionKey)) {
+    throw createHttpError(400, "A valid planner sectionKey is required.");
+  }
+
+  if (activeEntryId === null) {
+    setActivePlannerEntry(db, sectionKey, null);
+    return;
+  }
+
+  const plannerEntry = db.prepare(`
+    SELECT id, section_key
+    FROM planner_entries
+    WHERE id = ?
+  `).get(activeEntryId);
+
+  if (!plannerEntry || plannerEntry.section_key !== sectionKey) {
+    throw createHttpError(404, "Planner entry not found.");
+  }
+
+  setActivePlannerEntry(db, sectionKey, plannerEntry.id);
+}
+
+function updatePlannerEntry(db, entryId, plannerEntryInput) {
+  const normalizedEntryId = normalizePlannerEntryId(entryId);
+  const plannerEntry = db.prepare(`
+    SELECT id, section_key, archived
+    FROM planner_entries
+    WHERE id = ?
+  `).get(normalizedEntryId);
+
+  if (!plannerEntry) {
+    throw createHttpError(404, "Planner entry not found.");
+  }
+
+  if (typeof plannerEntryInput.archived !== "boolean") {
+    throw createHttpError(400, "A valid archived value is required.");
+  }
+
+  db.prepare(`
+    UPDATE planner_entries
+    SET archived = ?, deleted = 0, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(plannerEntryInput.archived ? 1 : 0, plannerEntry.id);
+
+  const plannerState = db.prepare(`
+    SELECT active_entry_id
+    FROM planner_state
+    WHERE section_key = ?
+  `).get(plannerEntry.section_key);
+
+  if (plannerState && normalizePlannerEntryId(plannerState.active_entry_id) === plannerEntry.id) {
+    setActivePlannerEntry(db, plannerEntry.section_key, null);
+  }
+}
+
+function deletePlannerEntry(db, entryId) {
+  const normalizedEntryId = normalizePlannerEntryId(entryId);
+  const plannerEntry = db.prepare(`
+    SELECT id, section_key
+    FROM planner_entries
+    WHERE id = ?
+  `).get(normalizedEntryId);
+
+  if (!plannerEntry) {
+    throw createHttpError(404, "Planner entry not found.");
+  }
+
+  db.prepare(`
+    DELETE FROM planner_entries
+    WHERE id = ?
+  `).run(plannerEntry.id);
+
+  const plannerState = db.prepare(`
+    SELECT active_entry_id
+    FROM planner_state
+    WHERE section_key = ?
+  `).get(plannerEntry.section_key);
+
+  if (plannerState && normalizePlannerEntryId(plannerState.active_entry_id) === plannerEntry.id) {
+    setActivePlannerEntry(db, plannerEntry.section_key, null);
+  }
+}
+
 function getNextTaskPosition(db, sectionKey, plannerEntryId) {
   const existingPositionRow = plannerEntryId === null
     ? db.prepare(`
@@ -197,6 +338,81 @@ function getNextTaskPosition(db, sectionKey, plannerEntryId) {
   }
 
   return existingPositionRow.min_position - 1;
+}
+
+function reorderTaskScopeForCompletion(db, sectionKey, plannerEntryId, taskId, isCompleted) {
+  const taskRows = getTaskScopeRows(db, sectionKey, plannerEntryId);
+  const reorderedRows = getReorderedTaskRows(taskRows, taskId, isCompleted);
+
+  db.exec("BEGIN");
+
+  try {
+    const updateTaskRow = db.prepare(`
+      UPDATE tasks
+      SET completed = ?, position = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `);
+
+    reorderedRows.forEach(function (taskRow, index) {
+      updateTaskRow.run(taskRow.completed ? 1 : 0, index, taskRow.id);
+    });
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function getTaskScopeRows(db, sectionKey, plannerEntryId) {
+  return plannerEntryId === null
+    ? db.prepare(`
+        SELECT id, completed, archived, position
+        FROM tasks
+        WHERE section_key = ?
+          AND planner_entry_id IS NULL
+        ORDER BY position ASC, id DESC
+      `).all(sectionKey)
+    : db.prepare(`
+        SELECT id, completed, archived, position
+        FROM tasks
+        WHERE planner_entry_id = ?
+        ORDER BY position ASC, id DESC
+      `).all(plannerEntryId);
+}
+
+function getReorderedTaskRows(taskRows, taskId, isCompleted) {
+  const normalizedTaskId = normalizePlannerEntryId(taskId);
+  const updatedTask = taskRows.find(function (taskRow) {
+    return taskRow.id === normalizedTaskId;
+  });
+
+  if (!updatedTask) {
+    throw createHttpError(404, "Task not found.");
+  }
+
+  const remainingTasks = taskRows.filter(function (taskRow) {
+    return taskRow.id !== normalizedTaskId;
+  });
+  const nextTask = {
+    ...updatedTask,
+    completed: Boolean(isCompleted)
+  };
+
+  if (!isCompleted) {
+    return [nextTask].concat(remainingTasks);
+  }
+
+  const firstCompletedIndex = remainingTasks.findIndex(function (taskRow) {
+    return Boolean(taskRow.completed);
+  });
+
+  if (firstCompletedIndex === -1) {
+    return remainingTasks.concat(nextTask);
+  }
+
+  remainingTasks.splice(firstCompletedIndex, 0, nextTask);
+  return remainingTasks;
 }
 
 function getPlannerEntryById(db, entryId) {
@@ -312,6 +528,11 @@ module.exports = {
   createPlannerEntry,
   createTask,
   databasePath,
+  deletePlannerEntry,
+  deleteTask,
   getAppState,
-  openDatabase
+  openDatabase,
+  setPlannerSelection,
+  updatePlannerEntry,
+  updateTask
 };

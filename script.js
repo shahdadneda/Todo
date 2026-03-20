@@ -1,8 +1,8 @@
-const STORAGE_KEY = "shahdad-todo-items";
 const SECTION_STORAGE_KEY = "shahdad-todo-active-section";
 const APP_STATE_API_URL = "http://127.0.0.1:3001/api/app-state";
 const TASKS_API_URL = "http://127.0.0.1:3001/api/tasks";
 const PLANNER_ENTRIES_API_URL = "http://127.0.0.1:3001/api/planner-entries";
+const PLANNER_STATE_API_URL = "http://127.0.0.1:3001/api/planner-state";
 const GENERAL_SECTION_KEY = "general";
 const WEEKEND_SECTION_KEY = "weekend-goals";
 const ESS_SECTION_KEY = "ess-planner";
@@ -180,11 +180,29 @@ taskList.addEventListener("click", function (event) {
 
   if (archiveButton) {
     const taskId = Number(archiveButton.dataset.id);
+    const taskToToggle = getCurrentTasks().find(function (task) {
+      return task.id === taskId;
+    });
 
-    animateTaskExit(taskId, function () {
-      toggleGeneralTaskArchive(taskId);
-      renderTasks();
-      formMessage.textContent = "";
+    if (!taskToToggle) {
+      return;
+    }
+
+    animateTaskExit(taskId, async function () {
+      try {
+        await mutateAppStateOnApi(`${TASKS_API_URL}/${taskId}`, {
+          method: "PATCH",
+          body: {
+            archived: !taskToToggle.archived
+          }
+        });
+        renderTasks();
+        formMessage.textContent = "";
+      } catch (error) {
+        console.error("Could not update task archive state.", error);
+        renderTasks();
+        formMessage.textContent = error.message || "Could not update the task.";
+      }
     });
     return;
   }
@@ -193,16 +211,24 @@ taskList.addEventListener("click", function (event) {
 
   if (deleteButton) {
     const taskId = Number(deleteButton.dataset.id);
-    const nextTasks = getCurrentTasks().filter(function (task) {
-      return task.id !== taskId;
-    });
 
-    setCurrentTasks(nextTasks);
-    renderTasks();
+    animateTaskExit(taskId, async function () {
+      try {
+        await mutateAppStateOnApi(`${TASKS_API_URL}/${taskId}`, {
+          method: "DELETE"
+        });
+        renderTasks();
+        formMessage.textContent = "";
+      } catch (error) {
+        console.error("Could not delete task.", error);
+        renderTasks();
+        formMessage.textContent = error.message || "Could not delete the task.";
+      }
+    });
   }
 });
 
-taskList.addEventListener("change", function (event) {
+taskList.addEventListener("change", async function (event) {
   if (!event.target.classList.contains("task-checkbox")) {
     return;
   }
@@ -211,10 +237,20 @@ taskList.addEventListener("change", function (event) {
   const taskId = Number(event.target.dataset.id);
   const isCompleted = event.target.checked;
 
-  const nextTasks = reorderTask(getCurrentTasks(), taskId, isCompleted);
-
-  setCurrentTasks(nextTasks);
-  renderTasks(previousPositions);
+  try {
+    await mutateAppStateOnApi(`${TASKS_API_URL}/${taskId}`, {
+      method: "PATCH",
+      body: {
+        completed: isCompleted
+      }
+    });
+    renderTasks(previousPositions);
+    formMessage.textContent = "";
+  } catch (error) {
+    console.error("Could not update task completion.", error);
+    renderTasks();
+    formMessage.textContent = error.message || "Could not update the task.";
+  }
 });
 
 sectionLinks.forEach(function (link) {
@@ -271,12 +307,32 @@ plannerEntryList.addEventListener("click", function (event) {
   const archiveButton = event.target.closest(".planner-entry-archive");
 
   if (archiveButton) {
-    animatePlannerEntryExit(archiveButton.dataset.entryId, function () {
-      togglePlannerEntryArchive(archiveButton.dataset.entryId);
-      formMessage.textContent = "";
-      renderSectionState();
-      renderPlannerControls();
-      renderTasks();
+    const entryId = archiveButton.dataset.entryId;
+    const entryToToggle = findPlannerEntryById(activeSection, entryId);
+
+    if (!entryToToggle) {
+      return;
+    }
+
+    animatePlannerEntryExit(entryId, async function () {
+      try {
+        await mutateAppStateOnApi(`${PLANNER_ENTRIES_API_URL}/${entryId}`, {
+          method: "PATCH",
+          body: {
+            archived: !entryToToggle.archived
+          }
+        });
+        formMessage.textContent = "";
+        renderSectionState();
+        renderPlannerControls();
+        renderTasks();
+      } catch (error) {
+        console.error("Could not update planner entry.", error);
+        renderSectionState();
+        renderPlannerControls();
+        renderTasks();
+        formMessage.textContent = error.message || "Could not update the planner entry.";
+      }
     });
     return;
   }
@@ -285,14 +341,23 @@ plannerEntryList.addEventListener("click", function (event) {
 
   if (deleteButton) {
     const entryIdToDelete = deleteButton.dataset.entryId;
-    animatePlannerEntryExit(entryIdToDelete, function () {
-      deletePlannerEntry(entryIdToDelete);
-      saveTasks();
-      resetDragState();
-      formMessage.textContent = "";
-      renderSectionState();
-      renderPlannerControls();
-      renderTasks();
+    animatePlannerEntryExit(entryIdToDelete, async function () {
+      try {
+        await mutateAppStateOnApi(`${PLANNER_ENTRIES_API_URL}/${entryIdToDelete}`, {
+          method: "DELETE"
+        });
+        resetDragState();
+        formMessage.textContent = "";
+        renderSectionState();
+        renderPlannerControls();
+        renderTasks();
+      } catch (error) {
+        console.error("Could not delete planner entry.", error);
+        renderSectionState();
+        renderPlannerControls();
+        renderTasks();
+        formMessage.textContent = error.message || "Could not delete the planner entry.";
+      }
     });
     return;
   }
@@ -311,14 +376,19 @@ plannerEntryList.addEventListener("click", function (event) {
     return;
   }
 
-  planner.activeEntryId = nextEntry.id;
-  saveTasks();
-  resetDragState();
-  formMessage.textContent = "";
-  renderSectionState();
-  renderPlannerControls();
-  renderTasks();
-  taskInput.focus();
+  selectPlannerEntry(activeSection, nextEntry.id)
+    .then(function () {
+      resetDragState();
+      formMessage.textContent = "";
+      renderSectionState();
+      renderPlannerControls();
+      renderTasks();
+      taskInput.focus();
+    })
+    .catch(function (error) {
+      console.error("Could not select planner entry.", error);
+      formMessage.textContent = error.message || "Could not select the planner entry.";
+    });
 });
 
 plannerDatePicker.addEventListener("click", async function (event) {
@@ -352,7 +422,18 @@ plannerDatePicker.addEventListener("click", async function (event) {
     return;
   }
 
-  const didCreatePlannerEntry = await createPlannerEntryFromDate(activeSection, selectedDate);
+  let didCreatePlannerEntry = false;
+
+  try {
+    didCreatePlannerEntry = await createPlannerEntryFromDate(activeSection, selectedDate);
+  } catch (error) {
+    console.error("Could not create planner entry.", error);
+    formMessage.textContent = error.message || "Could not create planner entry.";
+    renderSectionState();
+    renderPlannerControls();
+    renderTasks();
+    return;
+  }
 
   if (!didCreatePlannerEntry) {
     return;
@@ -563,10 +644,6 @@ function updateTaskCount(taskItems) {
   taskCount.textContent = String(remainingTasks);
 }
 
-function saveTasks() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasksBySection));
-}
-
 async function initializeApp() {
   try {
     tasksBySection = await loadTasksBySectionFromApi();
@@ -604,6 +681,13 @@ async function loadTasksBySectionFromApi() {
   });
 }
 
+function replaceAppState(nextAppState) {
+  tasksBySection = normalizeSections({
+    ...createEmptySections(),
+    ...(nextAppState && typeof nextAppState === "object" ? nextAppState : {})
+  });
+}
+
 async function createTaskOnApi(taskPayload) {
   const response = await fetch(TASKS_API_URL, {
     method: "POST",
@@ -624,6 +708,43 @@ async function createTaskOnApi(taskPayload) {
   }
 
   return responseData;
+}
+
+async function mutateAppStateOnApi(url, options) {
+  const requestOptions = {
+    method: options && options.method ? options.method : "PATCH",
+    headers: {
+      "Content-Type": "application/json"
+    }
+  };
+
+  if (options && Object.prototype.hasOwnProperty.call(options, "body")) {
+    requestOptions.body = JSON.stringify(options.body);
+  }
+
+  const response = await fetch(url, requestOptions);
+  const responseData = await response.json().catch(function () {
+    return null;
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      responseData && responseData.error ? responseData.error : "Could not update the app state."
+    );
+  }
+
+  replaceAppState(responseData);
+  return responseData;
+}
+
+async function selectPlannerEntry(sectionKey, entryId) {
+  return mutateAppStateOnApi(PLANNER_STATE_API_URL, {
+    method: "PATCH",
+    body: {
+      sectionKey: sectionKey,
+      activeEntryId: entryId
+    }
+  });
 }
 
 async function createPlannerEntryOnApi(plannerEntryPayload) {
@@ -1133,7 +1254,6 @@ function getCurrentTasks() {
 
 function setCurrentTasks(nextTasks) {
   applyCurrentTasks(nextTasks);
-  saveTasks();
 }
 
 function applyCurrentTasks(nextTasks) {
@@ -1281,25 +1401,6 @@ function getArchivedGeneralTasksCount() {
   }).length;
 }
 
-function toggleGeneralTaskArchive(taskId) {
-  if (activeSection !== GENERAL_SECTION_KEY) {
-    return;
-  }
-
-  tasksBySection[GENERAL_SECTION_KEY] = tasksBySection[GENERAL_SECTION_KEY].map(function (task) {
-    if (task.id !== taskId) {
-      return task;
-    }
-
-    return {
-      ...task,
-      archived: !task.archived
-    };
-  });
-
-  saveTasks();
-}
-
 function animateTaskExit(taskId, onComplete) {
   const taskItem = taskList.querySelector(`[data-task-id="${taskId}"]`);
 
@@ -1415,8 +1516,7 @@ async function createPlannerEntryFromDate(sectionKey, selectedDate) {
   });
 
   if (existingEntry) {
-    planner.activeEntryId = existingEntry.id;
-    saveTasks();
+    await selectPlannerEntry(sectionKey, existingEntry.id);
     return true;
   }
 
@@ -1447,72 +1547,6 @@ function getPlannerEntryDescriptorFromDate(sectionKey, selectedDate) {
     name: formatPlannerEntryDate(selectedDate),
     sortKey: getStartOfDay(selectedDate).getTime()
   };
-}
-
-function deletePlannerEntry(entryId) {
-  const planner = getPlannerData();
-  const entryToDelete = findPlannerEntryById(activeSection, entryId);
-
-  if (!entryToDelete) {
-    return;
-  }
-
-  planner.entries = planner.entries.filter(function (entry) {
-    return !areIdsEqual(entry.id, entryId);
-  });
-
-  if (areIdsEqual(planner.activeEntryId, entryId)) {
-    planner.activeEntryId = null;
-  }
-}
-
-function togglePlannerEntryArchive(entryId) {
-  const planner = getPlannerData();
-  const entryToToggle = findPlannerEntryById(activeSection, entryId);
-
-  if (!entryToToggle || !supportsPlannerArchives(activeSection)) {
-    return;
-  }
-
-  if (entryToToggle.archived) {
-    planner.entries = planner.entries.map(function (entry) {
-      if (!areIdsEqual(entry.id, entryId)) {
-        return entry;
-      }
-
-      return {
-        ...entry,
-        archived: false,
-        deleted: false
-      };
-    });
-
-    if (areIdsEqual(planner.activeEntryId, entryId) && isArchiveView(activeSection)) {
-      planner.activeEntryId = null;
-    }
-
-    if (isArchiveView(activeSection)) {
-      formMessage.textContent = "";
-    }
-
-    return;
-  }
-
-  planner.entries = planner.entries.map(function (entry) {
-    if (!areIdsEqual(entry.id, entryId)) {
-      return entry;
-    }
-
-    return {
-      ...entry,
-      archived: true,
-      deleted: false
-    };
-  });
-
-  if (areIdsEqual(planner.activeEntryId, entryId) && !isArchiveView(activeSection)) {
-    planner.activeEntryId = null;
-  }
 }
 
 function getVisiblePlannerEntries(sectionKey) {
@@ -1902,10 +1936,6 @@ function getPlannerSelectionMessage() {
   }
 
   return visibleEntries.length > 0 ? plannerConfig.noSelectionMessage : plannerConfig.noEntryMessage;
-}
-
-function createTaskId() {
-  return Date.now() + Math.floor(Math.random() * 1000);
 }
 
 function createEntryId(prefix) {
