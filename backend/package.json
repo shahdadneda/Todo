@@ -1,0 +1,14 @@
+{
+  "name": "shahdad-todo-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Express + SQLite backend for the Shahdad todo app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

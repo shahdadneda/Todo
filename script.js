@@ -1,5 +1,7 @@
 const STORAGE_KEY = "shahdad-todo-items";
 const SECTION_STORAGE_KEY = "shahdad-todo-active-section";
+const APP_STATE_API_URL = "http://127.0.0.1:3001/api/app-state";
+const TASKS_API_URL = "http://127.0.0.1:3001/api/tasks";
 const GENERAL_SECTION_KEY = "general";
 const WEEKEND_SECTION_KEY = "weekend-goals";
 const ESS_SECTION_KEY = "ess-planner";
@@ -87,17 +89,21 @@ const ENTRY_ARIA_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
 });
 
 let activeSection = loadActiveSection();
-let tasksBySection = loadTasksBySection();
+let tasksBySection = createEmptySections();
 let draggedTaskId = null;
 let dropIndicatorTaskId = null;
 let isPlannerDatePickerOpen = false;
 let plannerCalendarMonth = getStartOfMonth(new Date());
 let archiveViewBySection = createArchiveViewState();
+let isAppLoading = true;
+let appLoadErrorMessage = "";
+let isTaskCreationPending = false;
 
 renderSectionState();
 renderPlannerControls();
 renderTasks();
 renderPlannerDatePicker();
+initializeApp();
 
 todoArchiveToggle.addEventListener("click", function () {
   if (activeSection !== GENERAL_SECTION_KEY) {
@@ -110,7 +116,7 @@ todoArchiveToggle.addEventListener("click", function () {
   renderTasks();
 });
 
-todoForm.addEventListener("submit", function (event) {
+todoForm.addEventListener("submit", async function (event) {
   event.preventDefault();
 
   if (activeSection === GENERAL_SECTION_KEY && isArchiveView(GENERAL_SECTION_KEY)) {
@@ -130,19 +136,41 @@ todoForm.addEventListener("submit", function (event) {
     return;
   }
 
-  const newTask = {
-    id: createTaskId(),
-    text: taskText,
-    completed: false
-  };
+  if (isTaskCreationPending) {
+    return;
+  }
 
-  const nextTasks = [newTask].concat(getCurrentTasks());
-  setCurrentTasks(nextTasks);
-  renderTasks();
+  const activePlannerEntry = isPlannerSection(activeSection) ? getActivePlannerEntry() : null;
 
-  todoForm.reset();
-  taskInput.focus();
+  if (activePlannerEntry && typeof activePlannerEntry.id !== "number") {
+    formMessage.textContent = "This planner entry is not saved to the backend yet.";
+    return;
+  }
+
+  isTaskCreationPending = true;
+  updateTaskComposerState(canManageCurrentTasks());
   formMessage.textContent = "";
+
+  try {
+    const createdTask = await createTaskOnApi({
+      sectionKey: activeSection,
+      text: taskText,
+      plannerEntryId: activePlannerEntry ? activePlannerEntry.id : null
+    });
+    const nextTasks = [createdTask].concat(getCurrentTasks());
+
+    applyCurrentTasks(nextTasks);
+    renderTasks();
+    todoForm.reset();
+    taskInput.focus();
+    formMessage.textContent = "";
+  } catch (error) {
+    console.error("Could not create task.", error);
+    formMessage.textContent = error.message || "Could not add the task.";
+  } finally {
+    isTaskCreationPending = false;
+    updateTaskComposerState(canManageCurrentTasks());
+  }
 });
 
 taskList.addEventListener("click", function (event) {
@@ -271,12 +299,13 @@ plannerEntryList.addEventListener("click", function (event) {
 
   const nextEntryId = entryButton.dataset.entryId;
   const planner = getPlannerData();
+  const nextEntry = findPlannerEntryById(activeSection, nextEntryId);
 
-  if (planner.activeEntryId === nextEntryId) {
+  if (!nextEntry || areIdsEqual(planner.activeEntryId, nextEntry.id)) {
     return;
   }
 
-  planner.activeEntryId = nextEntryId;
+  planner.activeEntryId = nextEntry.id;
   saveTasks();
   resetDragState();
   formMessage.textContent = "";
@@ -421,12 +450,29 @@ taskList.addEventListener("dragend", function () {
 });
 
 function renderTasks(previousPositions) {
+  taskList.innerHTML = "";
+  renderGeneralArchiveToggle();
+
+  if (isAppLoading) {
+    updateTaskComposerState(false);
+    updateTaskCount([]);
+    emptyState.querySelector("p").textContent = "Loading tasks...";
+    emptyState.classList.remove("is-hidden");
+    return;
+  }
+
+  if (appLoadErrorMessage) {
+    updateTaskComposerState(false);
+    updateTaskCount([]);
+    emptyState.querySelector("p").textContent = appLoadErrorMessage;
+    emptyState.classList.remove("is-hidden");
+    return;
+  }
+
   const currentTasks = getVisibleTasks();
   const hasPlannerEntry = canManageCurrentTasks();
 
-  taskList.innerHTML = "";
   updateTaskComposerState(hasPlannerEntry);
-  renderGeneralArchiveToggle();
 
   if (!hasPlannerEntry) {
     updateTaskCount(currentTasks);
@@ -515,34 +561,63 @@ function saveTasks() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasksBySection));
 }
 
-function loadTasksBySection() {
-  const savedTasks = localStorage.getItem(STORAGE_KEY);
+async function initializeApp() {
+  try {
+    tasksBySection = await loadTasksBySectionFromApi();
+    appLoadErrorMessage = "";
+  } catch (error) {
+    console.error("Could not load tasks from backend.", error);
+    tasksBySection = createEmptySections();
+    appLoadErrorMessage = "Could not load tasks from the backend. Make sure the backend is running on http://127.0.0.1:3001.";
+  } finally {
+    isAppLoading = false;
+    renderSectionState();
+    renderPlannerControls();
+    renderTasks();
+    formMessage.textContent = appLoadErrorMessage;
+  }
+}
+
+async function loadTasksBySectionFromApi() {
+  const response = await fetch(APP_STATE_API_URL);
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}.`);
+  }
+
+  const parsedTasks = await response.json();
   const emptySections = createEmptySections();
 
-  if (!savedTasks) {
+  if (!parsedTasks || typeof parsedTasks !== "object") {
     return emptySections;
   }
 
-  try {
-    const parsedTasks = JSON.parse(savedTasks);
+  return normalizeSections({
+    ...emptySections,
+    ...parsedTasks
+  });
+}
 
-    if (Array.isArray(parsedTasks)) {
-      emptySections.general = parsedTasks;
-      return normalizeSections(emptySections);
-    }
+async function createTaskOnApi(taskPayload) {
+  const response = await fetch(TASKS_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(taskPayload)
+  });
 
-    if (!parsedTasks || typeof parsedTasks !== "object") {
-      return emptySections;
-    }
+  const responseData = await response.json().catch(function () {
+    return null;
+  });
 
-    return normalizeSections({
-      ...emptySections,
-      ...parsedTasks
-    });
-  } catch (error) {
-    console.error("Could not read saved tasks.", error);
-    return emptySections;
+  if (!response.ok) {
+    throw new Error(
+      responseData && responseData.error ? responseData.error : "Could not add the task."
+    );
   }
+
+  return responseData;
 }
 
 function createEmptySections() {
@@ -621,6 +696,22 @@ function renderPlannerControls() {
   }
 
   const plannerConfig = getPlannerConfig();
+
+  if (isAppLoading) {
+    plannerCreateButton.textContent = plannerConfig.createButtonLabel;
+    plannerDatePicker.setAttribute("aria-label", plannerConfig.datePickerLabel);
+    plannerArchiveToggle.textContent = plannerConfig.archiveButtonLabel || "Archives";
+    plannerArchiveToggle.classList.toggle("is-hidden", !supportsPlannerArchives(activeSection));
+    plannerArchiveToggle.classList.remove("is-active");
+    plannerArchiveToggle.setAttribute("aria-pressed", "false");
+    plannerArchiveToggle.disabled = true;
+    plannerEntryList.innerHTML = "";
+    plannerEmptyMessage.textContent = "Loading planner entries...";
+    plannerEmptyMessage.classList.remove("is-hidden");
+    closePlannerDatePicker();
+    return;
+  }
+
   const visibleEntries = getVisiblePlannerEntries();
   const hasArchivedEntries = getArchivedPlannerEntriesCount(activeSection) > 0;
   plannerCreateButton.textContent = plannerConfig.createButtonLabel;
@@ -652,7 +743,7 @@ function renderPlannerControls() {
 
     entryItem.className = "planner-entry-item";
 
-    if (entry.id === getPlannerData().activeEntryId) {
+    if (areIdsEqual(entry.id, getPlannerData().activeEntryId)) {
       entryItem.classList.add("is-active");
     }
 
@@ -975,7 +1066,10 @@ function normalizePlannerSection(sectionValue, plannerConfig, sectionKey) {
     }
 
     normalizedEntries.push({
-      id: typeof entry.id === "string" && entry.id ? entry.id : createEntryId(index),
+      id:
+        (typeof entry.id === "string" && entry.id) || typeof entry.id === "number"
+          ? entry.id
+          : createEntryId(index),
       name: name,
       tasks: normalizeTaskList(entry.tasks),
       archived: Boolean(entry.archived),
@@ -987,7 +1081,7 @@ function normalizePlannerSection(sectionValue, plannerConfig, sectionKey) {
   }, []);
 
   const activeEntryId = entries.some(function (entry) {
-    return entry.id === sectionValue.activeEntryId;
+    return areIdsEqual(entry.id, sectionValue.activeEntryId);
   })
     ? sectionValue.activeEntryId
     : null;
@@ -1008,15 +1102,19 @@ function getCurrentTasks() {
 }
 
 function setCurrentTasks(nextTasks) {
+  applyCurrentTasks(nextTasks);
+  saveTasks();
+}
+
+function applyCurrentTasks(nextTasks) {
   if (!isPlannerSection(activeSection)) {
     tasksBySection[activeSection] = nextTasks;
-    saveTasks();
     return;
   }
 
   const planner = getPlannerData();
   planner.entries = planner.entries.map(function (entry) {
-    if (entry.id !== planner.activeEntryId) {
+    if (!areIdsEqual(entry.id, planner.activeEntryId)) {
       return entry;
     }
 
@@ -1026,7 +1124,6 @@ function setCurrentTasks(nextTasks) {
     };
   });
 
-  saveTasks();
   renderPlannerControls();
 }
 
@@ -1060,14 +1157,25 @@ function updateTaskComposerState(hasPlannerEntry) {
   const canEditTasks = typeof hasPlannerEntry === "boolean" ? hasPlannerEntry : canManageCurrentTasks();
   const isGeneralArchiveMode =
     activeSection === GENERAL_SECTION_KEY && isArchiveView(GENERAL_SECTION_KEY);
-  const shouldDisableComposer = !canEditTasks || isGeneralArchiveMode;
+  const shouldDisableComposer =
+    isAppLoading ||
+    isTaskCreationPending ||
+    Boolean(appLoadErrorMessage) ||
+    !canEditTasks ||
+    isGeneralArchiveMode;
 
   taskInput.disabled = shouldDisableComposer;
   todoSubmitButton.disabled = shouldDisableComposer;
   taskInput.placeholder = shouldDisableComposer
-    ? isGeneralArchiveMode
-      ? "Leave Archives to add a new task"
-      : getPlannerSelectionMessage()
+    ? isAppLoading
+      ? "Loading tasks..."
+      : isTaskCreationPending
+        ? "Adding task..."
+      : appLoadErrorMessage
+        ? "Backend unavailable"
+        : isGeneralArchiveMode
+          ? "Leave Archives to add a new task"
+          : getPlannerSelectionMessage()
     : getTaskPlaceholder();
 }
 
@@ -1196,7 +1304,7 @@ function getActivePlannerEntry(sectionKey) {
 
   return (
     visibleEntries.find(function (entry) {
-      return entry.id === planner.activeEntryId;
+      return areIdsEqual(entry.id, planner.activeEntryId);
     }) || null
   );
 }
@@ -1284,10 +1392,10 @@ function deletePlannerEntry(entryId) {
   }
 
   planner.entries = planner.entries.filter(function (entry) {
-    return entry.id !== entryId;
+    return !areIdsEqual(entry.id, entryId);
   });
 
-  if (planner.activeEntryId === entryId) {
+  if (areIdsEqual(planner.activeEntryId, entryId)) {
     planner.activeEntryId = null;
   }
 }
@@ -1302,7 +1410,7 @@ function togglePlannerEntryArchive(entryId) {
 
   if (entryToToggle.archived) {
     planner.entries = planner.entries.map(function (entry) {
-      if (entry.id !== entryId) {
+      if (!areIdsEqual(entry.id, entryId)) {
         return entry;
       }
 
@@ -1313,7 +1421,7 @@ function togglePlannerEntryArchive(entryId) {
       };
     });
 
-    if (planner.activeEntryId === entryId && isArchiveView(activeSection)) {
+    if (areIdsEqual(planner.activeEntryId, entryId) && isArchiveView(activeSection)) {
       planner.activeEntryId = null;
     }
 
@@ -1325,7 +1433,7 @@ function togglePlannerEntryArchive(entryId) {
   }
 
   planner.entries = planner.entries.map(function (entry) {
-    if (entry.id !== entryId) {
+    if (!areIdsEqual(entry.id, entryId)) {
       return entry;
     }
 
@@ -1336,7 +1444,7 @@ function togglePlannerEntryArchive(entryId) {
     };
   });
 
-  if (planner.activeEntryId === entryId && !isArchiveView(activeSection)) {
+  if (areIdsEqual(planner.activeEntryId, entryId) && !isArchiveView(activeSection)) {
     planner.activeEntryId = null;
   }
 }
@@ -1495,7 +1603,7 @@ function findPlannerEntryById(sectionKey, entryId) {
 
   return (
     planner.entries.find(function (entry) {
-      return entry.id === entryId;
+      return areIdsEqual(entry.id, entryId);
     }) || null
   );
 }
@@ -1736,6 +1844,14 @@ function createTaskId() {
 
 function createEntryId(prefix) {
   return `${prefix || "planner"}-entry-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+}
+
+function areIdsEqual(firstId, secondId) {
+  if (firstId === null || firstId === undefined || secondId === null || secondId === undefined) {
+    return false;
+  }
+
+  return String(firstId) === String(secondId);
 }
 
 function isPlannerSection(sectionKey) {
