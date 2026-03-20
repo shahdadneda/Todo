@@ -1,5 +1,5 @@
 const express = require("express");
-const { createTask, databasePath, getAppState, openDatabase } = require("./db");
+const { createPlannerEntry, createTask, databasePath, getAppState, openDatabase } = require("./db");
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -43,6 +43,26 @@ app.post("/api/tasks", function (request, response) {
     console.error("Could not create task.", error);
     response.status(500).json({
       error: "Could not create task."
+    });
+  }
+});
+
+app.post("/api/planner-entries", function (request, response) {
+  try {
+    const plannerEntry = createPlannerEntry(db, request.body || {});
+
+    response.status(201).json(plannerEntry);
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not create planner entry.", error);
+    response.status(500).json({
+      error: "Could not create planner entry."
     });
   }
 });

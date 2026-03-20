@@ -133,6 +133,51 @@ function createTask(db, taskInput) {
   return mapTaskRow(createdTaskRow);
 }
 
+function createPlannerEntry(db, plannerEntryInput) {
+  const sectionKey = typeof plannerEntryInput.sectionKey === "string" ? plannerEntryInput.sectionKey : "";
+  const name = typeof plannerEntryInput.name === "string" ? plannerEntryInput.name.trim() : "";
+  const sortKey = normalizeSortKey(plannerEntryInput.sortKey);
+
+  if (!["weekend-goals", "ess-planner"].includes(sectionKey)) {
+    throw createHttpError(400, "A valid planner sectionKey is required.");
+  }
+
+  if (!name) {
+    throw createHttpError(400, "Planner entry name is required.");
+  }
+
+  if (!Number.isFinite(sortKey)) {
+    throw createHttpError(400, "A valid sortKey is required.");
+  }
+
+  if (sectionKey === "weekend-goals") {
+    const existingEntry = db.prepare(`
+      SELECT id
+      FROM planner_entries
+      WHERE section_key = ?
+        AND sort_key = ?
+        AND deleted = 0
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(sectionKey, sortKey);
+
+    if (existingEntry) {
+      setActivePlannerEntry(db, sectionKey, existingEntry.id);
+      return getPlannerEntryById(db, existingEntry.id);
+    }
+  }
+
+  const insertPlannerEntry = db.prepare(`
+    INSERT INTO planner_entries (section_key, name, archived, deleted, sort_key)
+    VALUES (?, ?, 0, 0, ?)
+  `);
+  const insertResult = insertPlannerEntry.run(sectionKey, name, sortKey);
+
+  setActivePlannerEntry(db, sectionKey, insertResult.lastInsertRowid);
+
+  return getPlannerEntryById(db, insertResult.lastInsertRowid);
+}
+
 function getNextTaskPosition(db, sectionKey, plannerEntryId) {
   const existingPositionRow = plannerEntryId === null
     ? db.prepare(`
@@ -154,6 +199,35 @@ function getNextTaskPosition(db, sectionKey, plannerEntryId) {
   return existingPositionRow.min_position - 1;
 }
 
+function getPlannerEntryById(db, entryId) {
+  const plannerEntryRow = db.prepare(`
+    SELECT id, section_key, name, archived, deleted, sort_key
+    FROM planner_entries
+    WHERE id = ?
+  `).get(entryId);
+
+  if (!plannerEntryRow) {
+    return null;
+  }
+
+  const taskRows = db.prepare(`
+    SELECT id, text, completed, archived
+    FROM tasks
+    WHERE planner_entry_id = ?
+    ORDER BY position ASC, id DESC
+  `).all(entryId);
+
+  return mapPlannerEntryRow(plannerEntryRow, taskRows.map(mapTaskRow));
+}
+
+function setActivePlannerEntry(db, sectionKey, entryId) {
+  db.prepare(`
+    INSERT INTO planner_state (section_key, active_entry_id)
+    VALUES (?, ?)
+    ON CONFLICT(section_key) DO UPDATE SET active_entry_id = excluded.active_entry_id
+  `).run(sectionKey, entryId);
+}
+
 function normalizePlannerEntryId(plannerEntryId) {
   if (plannerEntryId === null || plannerEntryId === undefined || plannerEntryId === "") {
     return null;
@@ -168,6 +242,22 @@ function normalizePlannerEntryId(plannerEntryId) {
   }
 
   return plannerEntryId;
+}
+
+function normalizeSortKey(sortKey) {
+  if (typeof sortKey === "number" && Number.isFinite(sortKey)) {
+    return sortKey;
+  }
+
+  if (typeof sortKey === "string" && sortKey.trim() !== "") {
+    const numericSortKey = Number(sortKey);
+
+    if (Number.isFinite(numericSortKey)) {
+      return numericSortKey;
+    }
+  }
+
+  return Number.NaN;
 }
 
 function createHttpError(status, message) {
@@ -198,6 +288,17 @@ function buildPlannerSection(sectionKey, plannerEntries, tasksByEntryId, activeE
   };
 }
 
+function mapPlannerEntryRow(row, tasks) {
+  return {
+    id: row.id,
+    name: row.name,
+    tasks: Array.isArray(tasks) ? tasks : [],
+    archived: Boolean(row.archived),
+    deleted: Boolean(row.deleted),
+    sortKey: row.sort_key
+  };
+}
+
 function mapTaskRow(row) {
   return {
     id: row.id,
@@ -208,6 +309,7 @@ function mapTaskRow(row) {
 }
 
 module.exports = {
+  createPlannerEntry,
   createTask,
   databasePath,
   getAppState,

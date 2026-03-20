@@ -2,6 +2,7 @@ const STORAGE_KEY = "shahdad-todo-items";
 const SECTION_STORAGE_KEY = "shahdad-todo-active-section";
 const APP_STATE_API_URL = "http://127.0.0.1:3001/api/app-state";
 const TASKS_API_URL = "http://127.0.0.1:3001/api/tasks";
+const PLANNER_ENTRIES_API_URL = "http://127.0.0.1:3001/api/planner-entries";
 const GENERAL_SECTION_KEY = "general";
 const WEEKEND_SECTION_KEY = "weekend-goals";
 const ESS_SECTION_KEY = "ess-planner";
@@ -98,6 +99,7 @@ let archiveViewBySection = createArchiveViewState();
 let isAppLoading = true;
 let appLoadErrorMessage = "";
 let isTaskCreationPending = false;
+let isPlannerEntryCreationPending = false;
 
 renderSectionState();
 renderPlannerControls();
@@ -238,6 +240,10 @@ sectionLinks.forEach(function (link) {
 });
 
 plannerCreateButton.addEventListener("click", function () {
+  if (isPlannerEntryCreationPending) {
+    return;
+  }
+
   if (isPlannerDatePickerOpen) {
     closePlannerDatePicker();
     return;
@@ -315,7 +321,7 @@ plannerEntryList.addEventListener("click", function (event) {
   taskInput.focus();
 });
 
-plannerDatePicker.addEventListener("click", function (event) {
+plannerDatePicker.addEventListener("click", async function (event) {
   const navButton = event.target.closest(".planner-date-picker-nav-button");
 
   if (navButton) {
@@ -346,7 +352,7 @@ plannerDatePicker.addEventListener("click", function (event) {
     return;
   }
 
-  const didCreatePlannerEntry = createPlannerEntryFromDate(activeSection, selectedDate);
+  const didCreatePlannerEntry = await createPlannerEntryFromDate(activeSection, selectedDate);
 
   if (!didCreatePlannerEntry) {
     return;
@@ -620,6 +626,28 @@ async function createTaskOnApi(taskPayload) {
   return responseData;
 }
 
+async function createPlannerEntryOnApi(plannerEntryPayload) {
+  const response = await fetch(PLANNER_ENTRIES_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(plannerEntryPayload)
+  });
+
+  const responseData = await response.json().catch(function () {
+    return null;
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      responseData && responseData.error ? responseData.error : "Could not create planner entry."
+    );
+  }
+
+  return responseData;
+}
+
 function createEmptySections() {
   return {
     general: [],
@@ -699,6 +727,7 @@ function renderPlannerControls() {
 
   if (isAppLoading) {
     plannerCreateButton.textContent = plannerConfig.createButtonLabel;
+    plannerCreateButton.disabled = true;
     plannerDatePicker.setAttribute("aria-label", plannerConfig.datePickerLabel);
     plannerArchiveToggle.textContent = plannerConfig.archiveButtonLabel || "Archives";
     plannerArchiveToggle.classList.toggle("is-hidden", !supportsPlannerArchives(activeSection));
@@ -715,6 +744,7 @@ function renderPlannerControls() {
   const visibleEntries = getVisiblePlannerEntries();
   const hasArchivedEntries = getArchivedPlannerEntriesCount(activeSection) > 0;
   plannerCreateButton.textContent = plannerConfig.createButtonLabel;
+  plannerCreateButton.disabled = isPlannerEntryCreationPending;
   plannerDatePicker.setAttribute("aria-label", plannerConfig.datePickerLabel);
   plannerArchiveToggle.textContent = plannerConfig.archiveButtonLabel || "Archives";
   plannerArchiveToggle.classList.toggle("is-hidden", !supportsPlannerArchives(activeSection));
@@ -1127,6 +1157,32 @@ function applyCurrentTasks(nextTasks) {
   renderPlannerControls();
 }
 
+function applyPlannerEntry(sectionKey, plannerEntry) {
+  const planner = getPlannerData(sectionKey);
+  const normalizedSection = normalizePlannerSection(
+    {
+      entries: [plannerEntry],
+      activeEntryId: plannerEntry.id
+    },
+    getPlannerConfig(sectionKey),
+    sectionKey
+  );
+  const normalizedEntry = normalizedSection.entries[0];
+
+  if (!normalizedEntry) {
+    return;
+  }
+
+  planner.entries = sortPlannerEntries(
+    planner.entries
+      .filter(function (entry) {
+        return !areIdsEqual(entry.id, normalizedEntry.id);
+      })
+      .concat(normalizedEntry)
+  );
+  planner.activeEntryId = normalizedEntry.id;
+}
+
 function canManageCurrentTasks() {
   if (!isPlannerSection(activeSection)) {
     return true;
@@ -1310,27 +1366,39 @@ function getActivePlannerEntry(sectionKey) {
 }
 
 function createPlannerEntry(sectionKey, entryDescriptor) {
-  const planner = getPlannerData(sectionKey);
-  const newEntry = {
-    id: createEntryId(sectionKey),
+  return createPlannerEntryOnApi({
+    sectionKey: sectionKey,
     name: entryDescriptor.name,
-    tasks: [],
-    archived: false,
-    deleted: false,
     sortKey: entryDescriptor.sortKey
-  };
-
-  planner.entries = sortPlannerEntries(planner.entries.concat(newEntry));
-  planner.activeEntryId = newEntry.id;
-
-  if (supportsPlannerArchives(sectionKey)) {
-    setArchiveView(sectionKey, false);
-  }
-
-  saveTasks();
+  });
 }
 
-function createPlannerEntryFromDate(sectionKey, selectedDate) {
+async function createAndApplyPlannerEntry(sectionKey, entryDescriptor) {
+  isPlannerEntryCreationPending = true;
+  renderPlannerControls();
+  formMessage.textContent = "";
+
+  try {
+    const createdEntry = await createPlannerEntry(sectionKey, entryDescriptor);
+
+    applyPlannerEntry(sectionKey, createdEntry);
+
+    if (supportsPlannerArchives(sectionKey)) {
+      setArchiveView(sectionKey, false);
+    }
+  } catch (error) {
+    console.error("Could not create planner entry.", error);
+    formMessage.textContent = error.message || "Could not create planner entry.";
+    return false;
+  } finally {
+    isPlannerEntryCreationPending = false;
+    renderPlannerControls();
+  }
+
+  return true;
+}
+
+async function createPlannerEntryFromDate(sectionKey, selectedDate) {
   const entryDescriptor = getPlannerEntryDescriptorFromDate(sectionKey, selectedDate);
 
   if (!entryDescriptor) {
@@ -1338,8 +1406,7 @@ function createPlannerEntryFromDate(sectionKey, selectedDate) {
   }
 
   if (sectionKey !== WEEKEND_SECTION_KEY) {
-    createPlannerEntry(sectionKey, entryDescriptor);
-    return true;
+    return createAndApplyPlannerEntry(sectionKey, entryDescriptor);
   }
 
   const planner = getPlannerData(sectionKey);
@@ -1353,8 +1420,7 @@ function createPlannerEntryFromDate(sectionKey, selectedDate) {
     return true;
   }
 
-  createPlannerEntry(sectionKey, entryDescriptor);
-  return true;
+  return createAndApplyPlannerEntry(sectionKey, entryDescriptor);
 }
 
 function getPlannerEntryDescriptorFromDate(sectionKey, selectedDate) {
