@@ -7,6 +7,7 @@ const {
   deleteTask,
   getAppState,
   openDatabase,
+  reorderTasks,
   setPlannerSelection,
   updatePlannerEntry,
   updateTask
@@ -74,6 +75,25 @@ app.post("/api/planner-entries", function (request, response) {
     console.error("Could not create planner entry.", error);
     response.status(500).json({
       error: "Could not create planner entry."
+    });
+  }
+});
+
+app.post("/api/tasks/reorder", function (request, response) {
+  try {
+    reorderTasks(db, request.body || {});
+    response.json(getAppState(db));
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not reorder tasks.", error);
+    response.status(500).json({
+      error: "Could not reorder tasks."
     });
   }
 });

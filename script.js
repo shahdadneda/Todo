@@ -1,6 +1,7 @@
 const SECTION_STORAGE_KEY = "shahdad-todo-active-section";
 const APP_STATE_API_URL = "http://127.0.0.1:3001/api/app-state";
 const TASKS_API_URL = "http://127.0.0.1:3001/api/tasks";
+const TASK_REORDER_API_URL = "http://127.0.0.1:3001/api/tasks/reorder";
 const PLANNER_ENTRIES_API_URL = "http://127.0.0.1:3001/api/planner-entries";
 const PLANNER_STATE_API_URL = "http://127.0.0.1:3001/api/planner-state";
 const GENERAL_SECTION_KEY = "general";
@@ -515,14 +516,22 @@ taskList.addEventListener("dragover", function (event) {
   }
 });
 
-taskList.addEventListener("drop", function (event) {
+taskList.addEventListener("drop", async function (event) {
   if (!draggedTaskId) {
     return;
   }
 
   event.preventDefault();
   clearDropIndicator();
-  syncTasksToDomOrder();
+
+  try {
+    await syncTasksToDomOrder();
+    formMessage.textContent = "";
+  } catch (error) {
+    console.error("Could not reorder tasks.", error);
+    renderTasks();
+    formMessage.textContent = error.message || "Could not reorder the tasks.";
+  }
 });
 
 taskList.addEventListener("dragend", function () {
@@ -735,6 +744,13 @@ async function mutateAppStateOnApi(url, options) {
 
   replaceAppState(responseData);
   return responseData;
+}
+
+async function reorderTasksOnApi(reorderPayload) {
+  return mutateAppStateOnApi(TASK_REORDER_API_URL, {
+    method: "POST",
+    body: reorderPayload
+  });
 }
 
 async function selectPlannerEntry(sectionKey, entryId) {
@@ -973,7 +989,7 @@ function reorderTask(taskItems, taskId, isCompleted) {
   return remainingTasks;
 }
 
-function syncTasksToDomOrder() {
+async function syncTasksToDomOrder() {
   const currentTasks = getCurrentTasks();
   const taskLookup = new Map(
     currentTasks.map(function (task) {
@@ -986,19 +1002,35 @@ function syncTasksToDomOrder() {
       return taskLookup.get(taskItem.dataset.taskId);
     })
     .filter(Boolean);
+  const orderedTaskIds = reorderedVisibleTasks.map(function (task) {
+    return task.id;
+  });
 
-  if (activeSection !== GENERAL_SECTION_KEY) {
-    setCurrentTasks(reorderedVisibleTasks);
+  if (orderedTaskIds.length === 0) {
     return;
   }
 
-  const hiddenTasks = currentTasks.filter(function (task) {
-    return !reorderedVisibleTasks.some(function (visibleTask) {
-      return visibleTask.id === task.id;
-    });
-  });
+  if (activeSection !== GENERAL_SECTION_KEY) {
+    const activePlannerEntry = getActivePlannerEntry();
 
-  setCurrentTasks(reorderedVisibleTasks.concat(hiddenTasks));
+    if (!activePlannerEntry) {
+      return;
+    }
+
+    await reorderTasksOnApi({
+      sectionKey: activeSection,
+      plannerEntryId: activePlannerEntry.id,
+      orderedTaskIds: orderedTaskIds
+    });
+    return;
+  }
+
+  await reorderTasksOnApi({
+    sectionKey: GENERAL_SECTION_KEY,
+    plannerEntryId: null,
+    orderedTaskIds: orderedTaskIds,
+    visibleArchived: isArchiveView(GENERAL_SECTION_KEY)
+  });
 }
 
 function getDragAfterElement(pointerY) {

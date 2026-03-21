@@ -319,6 +319,71 @@ function deletePlannerEntry(db, entryId) {
   }
 }
 
+function reorderTasks(db, reorderInput) {
+  const sectionKey = typeof reorderInput.sectionKey === "string" ? reorderInput.sectionKey : "";
+  const plannerEntryId = normalizePlannerEntryId(reorderInput.plannerEntryId);
+  const orderedTaskIds = Array.isArray(reorderInput.orderedTaskIds)
+    ? reorderInput.orderedTaskIds.map(normalizePlannerEntryId)
+    : null;
+  const visibleArchived = typeof reorderInput.visibleArchived === "boolean"
+    ? reorderInput.visibleArchived
+    : null;
+
+  if (!["general", "weekend-goals", "ess-planner"].includes(sectionKey)) {
+    throw createHttpError(400, "A valid sectionKey is required.");
+  }
+
+  if (!Array.isArray(orderedTaskIds)) {
+    throw createHttpError(400, "orderedTaskIds must be an array.");
+  }
+
+  if (sectionKey === "general") {
+    if (plannerEntryId !== null) {
+      throw createHttpError(400, "General reorder cannot include plannerEntryId.");
+    }
+
+    if (visibleArchived === null) {
+      throw createHttpError(400, "visibleArchived is required for General reorder.");
+    }
+  } else {
+    if (!Number.isInteger(plannerEntryId)) {
+      throw createHttpError(400, "plannerEntryId is required for planner reorder.");
+    }
+
+    const plannerEntry = db.prepare(`
+      SELECT id, section_key
+      FROM planner_entries
+      WHERE id = ?
+    `).get(plannerEntryId);
+
+    if (!plannerEntry || plannerEntry.section_key !== sectionKey) {
+      throw createHttpError(404, "Planner entry not found.");
+    }
+  }
+
+  const scopeRows = getTaskScopeRows(db, sectionKey, plannerEntryId);
+  const reorderedRows = getReorderedTaskScopeRows(scopeRows, orderedTaskIds, visibleArchived);
+
+  db.exec("BEGIN");
+
+  try {
+    const updateTaskPosition = db.prepare(`
+      UPDATE tasks
+      SET position = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `);
+
+    reorderedRows.forEach(function (taskRow, index) {
+      updateTaskPosition.run(index, taskRow.id);
+    });
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function getNextTaskPosition(db, sectionKey, plannerEntryId) {
   const existingPositionRow = plannerEntryId === null
     ? db.prepare(`
@@ -379,6 +444,48 @@ function getTaskScopeRows(db, sectionKey, plannerEntryId) {
         WHERE planner_entry_id = ?
         ORDER BY position ASC, id DESC
       `).all(plannerEntryId);
+}
+
+function getReorderedTaskScopeRows(taskRows, orderedTaskIds, visibleArchived) {
+  const taskRowById = new Map(
+    taskRows.map(function (taskRow) {
+      return [taskRow.id, taskRow];
+    })
+  );
+  const visibleTaskRows = visibleArchived === null
+    ? taskRows
+    : taskRows.filter(function (taskRow) {
+        return Boolean(taskRow.archived) === visibleArchived;
+      });
+
+  if (orderedTaskIds.length !== visibleTaskRows.length) {
+    throw createHttpError(400, "orderedTaskIds does not match the visible task list.");
+  }
+
+  const visibleTaskIdSet = new Set(
+    visibleTaskRows.map(function (taskRow) {
+      return taskRow.id;
+    })
+  );
+
+  if (new Set(orderedTaskIds).size !== orderedTaskIds.length) {
+    throw createHttpError(400, "orderedTaskIds must not contain duplicates.");
+  }
+
+  const reorderedVisibleRows = orderedTaskIds.map(function (taskId) {
+    if (!visibleTaskIdSet.has(taskId)) {
+      throw createHttpError(400, "orderedTaskIds contains an invalid task id.");
+    }
+
+    return taskRowById.get(taskId);
+  });
+  const hiddenRows = visibleArchived === null
+    ? []
+    : taskRows.filter(function (taskRow) {
+        return !visibleTaskIdSet.has(taskRow.id);
+      });
+
+  return reorderedVisibleRows.concat(hiddenRows);
 }
 
 function getReorderedTaskRows(taskRows, taskId, isCompleted) {
@@ -532,6 +639,7 @@ module.exports = {
   deleteTask,
   getAppState,
   openDatabase,
+  reorderTasks,
   setPlannerSelection,
   updatePlannerEntry,
   updateTask
