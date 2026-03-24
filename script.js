@@ -1,9 +1,12 @@
 const SECTION_STORAGE_KEY = "shahdad-todo-active-section";
-const APP_STATE_API_URL = "http://127.0.0.1:3001/api/app-state";
-const TASKS_API_URL = "http://127.0.0.1:3001/api/tasks";
-const TASK_REORDER_API_URL = "http://127.0.0.1:3001/api/tasks/reorder";
-const PLANNER_ENTRIES_API_URL = "http://127.0.0.1:3001/api/planner-entries";
-const PLANNER_STATE_API_URL = "http://127.0.0.1:3001/api/planner-state";
+const API_BASE_URL = ["127.0.0.1", "localhost"].includes(window.location.hostname)
+  ? "http://127.0.0.1:3001/api"
+  : "https://server.shahdad.ca/api";
+const APP_STATE_API_URL = `${API_BASE_URL}/app-state`;
+const TASKS_API_URL = `${API_BASE_URL}/tasks`;
+const TASK_REORDER_API_URL = `${API_BASE_URL}/tasks/reorder`;
+const PLANNER_ENTRIES_API_URL = `${API_BASE_URL}/planner-entries`;
+const PLANNER_STATE_API_URL = `${API_BASE_URL}/planner-state`;
 const GENERAL_SECTION_KEY = "general";
 const WEEKEND_SECTION_KEY = "weekend-goals";
 const ESS_SECTION_KEY = "ess-planner";
@@ -660,7 +663,7 @@ async function initializeApp() {
   } catch (error) {
     console.error("Could not load tasks from backend.", error);
     tasksBySection = createEmptySections();
-    appLoadErrorMessage = "Could not load tasks from the backend. Make sure the backend is running on http://127.0.0.1:3001.";
+    appLoadErrorMessage = `Could not load tasks from the backend. Make sure the backend is running on ${API_BASE_URL.replace(/\/api$/, "")}.`;
   } finally {
     isAppLoading = false;
     renderSectionState();

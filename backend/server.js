@@ -17,14 +17,41 @@ const app = express();
 const port = process.env.PORT || 3001;
 const host = process.env.HOST || "127.0.0.1";
 const db = openDatabase();
+const allowedOrigins = new Set([
+  "https://shahdad.ca",
+  "https://www.shahdad.ca",
+  "http://127.0.0.1:8080",
+  "http://localhost:8080"
+]);
 
 app.use(function (request, response, next) {
-  response.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = request.headers.origin;
+  const isAllowedOrigin = allowedOrigins.has(origin);
+
+  if (isAllowedOrigin) {
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Vary", "Origin");
+  }
+
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (request.method === "OPTIONS") {
+    if (origin && !isAllowedOrigin) {
+      response.status(403).json({
+        error: "CORS origin not allowed."
+      });
+      return;
+    }
+
     response.sendStatus(204);
+    return;
+  }
+
+  if (origin && !isAllowedOrigin) {
+    response.status(403).json({
+      error: "CORS origin not allowed."
+    });
     return;
   }
 
