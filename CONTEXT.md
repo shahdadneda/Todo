@@ -3,17 +3,39 @@
 ## What This Project Is
 
 This repo is the standalone source for Shahdad's to-do / planner app. It is a
-plain front-end app built with only HTML, CSS, and vanilla JavaScript.
+plain app with:
 
-There is:
+- A static frontend built with HTML, CSS, and vanilla JavaScript
+- A small Node.js / Express backend
+- A SQLite database for persistence
+
+There is still:
 
 - No React / Next.js / framework
-- No build step
-- No backend
-- No package manager setup in this repo
+- No frontend build step
 
 The app is designed to feel like a lightweight planner that fits the visual
 style of `shahdad.ca`.
+
+## Deployment / Environment Setup
+
+Current known environments:
+
+- Production frontend: `https://shahdad.ca/todo`
+- Production backend: `https://server.shahdad.ca`
+- Local development backend API: `http://127.0.0.1:3001/api`
+- Allowed local frontend origins for development:
+  - `http://127.0.0.1:8080`
+  - `http://localhost:8080`
+
+Frontend API routing is environment-sensitive in `script.js`:
+
+- If the frontend hostname is `127.0.0.1` or `localhost`, it uses
+  `http://127.0.0.1:3001/api`
+- Otherwise, it uses `https://server.shahdad.ca/api`
+
+This logic is implemented through a shared `API_BASE_URL` constant, and all
+frontend API endpoints are derived from that base.
 
 ## Main Features
 
@@ -53,18 +75,25 @@ The app has 3 main sections:
 - `/Users/shahdadneda/Documents/Code/shahdad-todo/style.css`
   Entire visual styling, layout, spacing, responsive behavior, dark theme
 - `/Users/shahdadneda/Documents/Code/shahdad-todo/script.js`
-  All client-side behavior, state management, persistence, planner logic,
-  archive logic, date picker logic, and drag/reorder behavior
-
-There are no other source files in this repo right now.
+  All client-side behavior, state management, planner logic, archive logic,
+  date picker logic, drag/reorder behavior, and frontend API calls
+- `/Users/shahdadneda/Documents/Code/shahdad-todo/backend/server.js`
+  Express API server, CORS policy, route definitions, JSON handling, and server
+  startup
+- `/Users/shahdadneda/Documents/Code/shahdad-todo/backend/db.js`
+  SQLite access layer and data mutations for tasks, planner entries, selection,
+  and reorder logic
+- `/Users/shahdadneda/Documents/Code/shahdad-todo/backend/schema.sql`
+  Database schema
+- `/Users/shahdadneda/Documents/Code/shahdad-todo/backend/package.json`
+  Backend runtime dependencies and scripts
 
 ## How Data Is Saved
 
-The app stores data in `localStorage`.
+App data is stored in SQLite through the backend API.
 
-Important keys:
+The frontend still uses `localStorage` for lightweight UI state:
 
-- `shahdad-todo-items`
 - `shahdad-todo-active-section`
 
 What is persisted:
@@ -73,13 +102,15 @@ What is persisted:
 - Weekend planner entries and their tasks
 - ESS planner entries and their tasks
 - Archived state / archived entries
-- Last active section
+- Planner active entry selection
+- Last active section in the browser UI
 
 This means:
 
-- Data persists across refreshes in the same browser
-- Data is local to the browser/device
-- Clearing browser storage removes saved app data
+- Task and planner data comes from the backend and is shared by whichever
+  frontend is connected to that backend database
+- Clearing browser storage does not remove task data
+- Clearing browser storage can still reset the locally remembered active section
 
 ## State / Data Model Basics
 
@@ -156,6 +187,7 @@ Important practical note:
 The app includes several important interaction patterns:
 
 - Clickable left section navigation
+- Frontend API loading and mutation flows
 - Planner entry selection
 - Drag-and-drop task reordering
 - Checkbox completion toggles
@@ -212,8 +244,11 @@ come from:
 
 Future agents should start with these parts of `script.js`:
 
+- `API_BASE_URL` and API endpoint constants
 - Section constants and `SECTION_CONFIG`
-- Storage helpers
+- `initializeApp()` and API-loading helpers
+- API mutation helpers
+- Storage helpers for the active section only
 - `renderSectionState()`
 - `renderPlannerControls()`
 - `renderTasks()`
@@ -224,16 +259,53 @@ Future agents should start with these parts of `script.js`:
 Because the app is a single-file JS app, many behaviors are connected. Small
 changes in one render/helper function can affect multiple sections.
 
+## Backend Notes
+
+The backend is an Express server backed by SQLite.
+
+Current API areas include:
+
+- `/api/health`
+- `/api/app-state`
+- `/api/tasks`
+- `/api/tasks/reorder`
+- `/api/planner-entries`
+- `/api/planner-state`
+
+Current CORS policy is intentionally restrictive. Only these origins are
+allowed:
+
+- `https://shahdad.ca`
+- `https://www.shahdad.ca`
+- `http://127.0.0.1:8080`
+- `http://localhost:8080`
+
+The backend supports:
+
+- `GET`
+- `POST`
+- `PATCH`
+- `DELETE`
+- `OPTIONS`
+- JSON requests with `Content-Type`
+
+If changing frontend hosting or dev ports later, remember to update the backend
+CORS allowlist too.
+
 ## Things To Be Careful About
 
 - Do not accidentally remove archive behavior while changing planner logic
 - Do not assume General and planner sections use the same data shape
 - Do not break date restrictions for Weekend vs ESS entries
 - Do not introduce frameworks or a build system unless explicitly requested
+- Do not hardcode localhost API URLs in frontend fetches; use the shared
+  frontend API base
+- Do not loosen backend CORS without an explicit reason
 - Be careful with route/back-link assumptions if this is embedded into the main
   site later
 - Reordering, archiving, and section switching can be easy to regress because
   they share render/state functions
+- Frontend and backend need to stay aligned on API paths and allowed origins
 
 ## Testing Guidance For Future Agents
 
@@ -248,11 +320,14 @@ After any meaningful change, manually test:
 7. Delete a planner entry
 8. Toggle planner archives
 9. Refresh the page and verify data persisted
+10. Confirm frontend requests hit the expected backend for the current
+    environment
+11. Confirm browser requests are not blocked by CORS
 
 ## Repo Reality Check
 
-This repo appears to be the actual working Todo app source, unlike the main
-`shahdadSite` repo where `/todo/` may only be a redirect.
+This repo is the actual working Todo app source, including both the frontend and
+the backend.
 
 If a future agent is trying to fix planner behavior, this repo is likely the
 correct place to work first.

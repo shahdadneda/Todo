@@ -1,12 +1,11 @@
 const SECTION_STORAGE_KEY = "shahdad-todo-active-section";
-const API_BASE_URL = ["127.0.0.1", "localhost"].includes(window.location.hostname)
-  ? "http://127.0.0.1:3001/api"
-  : "https://server.shahdad.ca/api";
+const API_BASE_URL = "https://server.shahdad.ca/api";
 const APP_STATE_API_URL = `${API_BASE_URL}/app-state`;
 const TASKS_API_URL = `${API_BASE_URL}/tasks`;
 const TASK_REORDER_API_URL = `${API_BASE_URL}/tasks/reorder`;
 const PLANNER_ENTRIES_API_URL = `${API_BASE_URL}/planner-entries`;
 const PLANNER_STATE_API_URL = `${API_BASE_URL}/planner-state`;
+const APP_STATE_POLL_INTERVAL_MS = 5000;
 const GENERAL_SECTION_KEY = "general";
 const WEEKEND_SECTION_KEY = "weekend-goals";
 const ESS_SECTION_KEY = "ess-planner";
@@ -104,12 +103,16 @@ let isAppLoading = true;
 let appLoadErrorMessage = "";
 let isTaskCreationPending = false;
 let isPlannerEntryCreationPending = false;
+let lastAppStateSignature = "";
+let appStatePollIntervalId = null;
+let isAppStatePollInFlight = false;
 
 renderSectionState();
 renderPlannerControls();
 renderTasks();
 renderPlannerDatePicker();
 initializeApp();
+startAppStatePolling();
 
 todoArchiveToggle.addEventListener("click", function () {
   if (activeSection !== GENERAL_SECTION_KEY) {
@@ -659,10 +662,12 @@ function updateTaskCount(taskItems) {
 async function initializeApp() {
   try {
     tasksBySection = await loadTasksBySectionFromApi();
+    lastAppStateSignature = getAppStateSignature(tasksBySection);
     appLoadErrorMessage = "";
   } catch (error) {
     console.error("Could not load tasks from backend.", error);
     tasksBySection = createEmptySections();
+    lastAppStateSignature = getAppStateSignature(tasksBySection);
     appLoadErrorMessage = `Could not load tasks from the backend. Make sure the backend is running on ${API_BASE_URL.replace(/\/api$/, "")}.`;
   } finally {
     isAppLoading = false;
@@ -674,7 +679,9 @@ async function initializeApp() {
 }
 
 async function loadTasksBySectionFromApi() {
-  const response = await fetch(APP_STATE_API_URL);
+  const response = await fetch(APP_STATE_API_URL, {
+    cache: "no-store"
+  });
 
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}.`);
@@ -698,6 +705,57 @@ function replaceAppState(nextAppState) {
     ...createEmptySections(),
     ...(nextAppState && typeof nextAppState === "object" ? nextAppState : {})
   });
+  lastAppStateSignature = getAppStateSignature(tasksBySection);
+}
+
+function startAppStatePolling() {
+  if (appStatePollIntervalId) {
+    return;
+  }
+
+  appStatePollIntervalId = window.setInterval(function () {
+    void refreshAppStateFromApi();
+  }, APP_STATE_POLL_INTERVAL_MS);
+}
+
+async function refreshAppStateFromApi() {
+  if (isAppStatePollInFlight || draggedTaskId) {
+    return;
+  }
+
+  isAppStatePollInFlight = true;
+
+  try {
+    const nextAppState = await loadTasksBySectionFromApi();
+    const nextSignature = getAppStateSignature(nextAppState);
+
+    if (
+      nextSignature === lastAppStateSignature &&
+      !isAppLoading &&
+      !appLoadErrorMessage
+    ) {
+      return;
+    }
+
+    tasksBySection = nextAppState;
+    lastAppStateSignature = nextSignature;
+    isAppLoading = false;
+    appLoadErrorMessage = "";
+    renderSectionState();
+    renderPlannerControls();
+    renderTasks();
+  } catch (error) {
+    if (isAppLoading) {
+      appLoadErrorMessage = `Could not load tasks from the backend. Make sure the backend is running on ${API_BASE_URL.replace(/\/api$/, "")}.`;
+      renderSectionState();
+      renderPlannerControls();
+      renderTasks();
+    }
+
+    console.error("Could not refresh app state.", error);
+  } finally {
+    isAppStatePollInFlight = false;
+  }
 }
 
 async function createTaskOnApi(taskPayload) {
@@ -1204,6 +1262,10 @@ function normalizeTaskList(taskItems) {
   }, []);
 }
 
+function getAppStateSignature(appState) {
+  return JSON.stringify(appState);
+}
+
 function normalizePlannerSection(sectionValue, plannerConfig, sectionKey) {
   if (Array.isArray(sectionValue)) {
     const legacyTasks = normalizeTaskList(sectionValue);
@@ -1294,6 +1356,7 @@ function setCurrentTasks(nextTasks) {
 function applyCurrentTasks(nextTasks) {
   if (!isPlannerSection(activeSection)) {
     tasksBySection[activeSection] = nextTasks;
+    lastAppStateSignature = getAppStateSignature(tasksBySection);
     return;
   }
 
@@ -1309,6 +1372,7 @@ function applyCurrentTasks(nextTasks) {
     };
   });
 
+  lastAppStateSignature = getAppStateSignature(tasksBySection);
   renderPlannerControls();
 }
 
@@ -1336,6 +1400,7 @@ function applyPlannerEntry(sectionKey, plannerEntry) {
       .concat(normalizedEntry)
   );
   planner.activeEntryId = normalizedEntry.id;
+  lastAppStateSignature = getAppStateSignature(tasksBySection);
 }
 
 function canManageCurrentTasks() {
