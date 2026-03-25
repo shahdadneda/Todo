@@ -17,11 +17,21 @@ const app = express();
 const port = process.env.PORT || 3001;
 const host = process.env.HOST || "127.0.0.1";
 const db = openDatabase();
+const configuredOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(function (origin) {
+    return origin.trim();
+  })
+  .filter(Boolean);
+
 const allowedOrigins = new Set([
   "https://shahdad.ca",
   "https://www.shahdad.ca",
+  "http://127.0.0.1:5500",
+  "http://localhost:5500",
   "http://127.0.0.1:8080",
-  "http://localhost:8080"
+  "http://localhost:8080",
+  ...configuredOrigins
 ]);
 
 app.use(function (request, response, next) {
