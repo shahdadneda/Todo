@@ -28,14 +28,21 @@ Current known environments:
   - `http://127.0.0.1:8080`
   - `http://localhost:8080`
 
-Frontend API routing is environment-sensitive in `script.js`:
+Frontend API routing is currently pinned to production in `script.js`:
 
-- If the frontend hostname is `127.0.0.1` or `localhost`, it uses
-  `http://127.0.0.1:3001/api`
-- Otherwise, it uses `https://server.shahdad.ca/api`
+- The frontend uses `https://server.shahdad.ca/api` for all API requests,
+  including when the page is opened locally
+- All frontend API endpoints are derived from the shared `API_BASE_URL`
+  constant
+- This means local frontend testing now depends on the production backend's CORS
+  policy allowing the frontend origin
 
-This logic is implemented through a shared `API_BASE_URL` constant, and all
-frontend API endpoints are derived from that base.
+Frontend sync behavior:
+
+- The frontend loads the full app snapshot from `/api/app-state`
+- It polls the backend every 5 seconds for fresh app state
+- It only rerenders when the fetched app state actually differs from the
+  current in-memory state
 
 ## Main Features
 
@@ -188,6 +195,7 @@ The app includes several important interaction patterns:
 
 - Clickable left section navigation
 - Frontend API loading and mutation flows
+- Background polling of backend app state every 5 seconds
 - Planner entry selection
 - Drag-and-drop task reordering
 - Checkbox completion toggles
