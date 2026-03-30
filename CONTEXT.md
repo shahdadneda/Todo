@@ -25,8 +25,12 @@ Current known environments:
 - Production backend: `https://server.shahdad.ca`
 - Local development backend API: `http://127.0.0.1:3001/api`
 - Allowed local frontend origins for development:
+  - `http://127.0.0.1:5500`
+  - `http://localhost:5500`
   - `http://127.0.0.1:8080`
   - `http://localhost:8080`
+- Additional allowed frontend origins can be supplied through the backend
+  `ALLOWED_ORIGINS` environment variable
 
 Frontend API routing is currently pinned to production in `script.js`:
 
