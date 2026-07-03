@@ -606,14 +606,14 @@ function renderTasks(previousPositions) {
             >
               ${task.archived ? getCheckIconMarkup() : getArchiveIconMarkup()}
             </button>
-            <button class="task-delete" type="button" data-id="${task.id}">
-              Delete
+            <button class="task-delete" type="button" data-id="${task.id}" aria-label="Delete ${escapeHtml(task.text)}" title="Delete">
+              ${getTrashIconMarkup()}
             </button>
           </div>
         `
         : `
-          <button class="task-delete" type="button" data-id="${task.id}">
-            Delete
+          <button class="task-delete" type="button" data-id="${task.id}" aria-label="Delete ${escapeHtml(task.text)}" title="Delete">
+            ${getTrashIconMarkup()}
           </button>
         `;
 
@@ -639,6 +639,7 @@ function renderTasks(previousPositions) {
 
   emptyState.querySelector("p").textContent = getEmptyStateMessage();
   emptyState.classList.toggle("is-hidden", currentTasks.length > 0);
+  updateTaskCount(currentTasks);
 
   if (previousPositions) {
     animateTaskReorder(previousPositions);
@@ -988,7 +989,7 @@ function renderPlannerControls() {
           aria-label="Delete ${escapeHtml(entry.name)}"
           title="Delete"
         >
-          X
+          ${getTrashIconMarkup()}
         </button>
       </div>
     `;
@@ -2106,6 +2107,21 @@ function getCheckIconMarkup() {
         stroke-linecap="round"
         stroke-linejoin="round"
         stroke-width="2"
+      />
+    </svg>
+  `;
+}
+
+function getTrashIconMarkup() {
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M5 7h14M9.5 7V5.25A1.25 1.25 0 0 1 10.75 4h2.5A1.25 1.25 0 0 1 14.5 5.25V7M7.5 7l.7 11.2A1.5 1.5 0 0 0 9.7 19.6h4.6a1.5 1.5 0 0 0 1.5-1.4L16.5 7"
+        fill="none"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.7"
       />
     </svg>
   `;
