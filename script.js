@@ -5,11 +5,14 @@ const TASKS_API_URL = `${API_BASE_URL}/tasks`;
 const TASK_REORDER_API_URL = `${API_BASE_URL}/tasks/reorder`;
 const PLANNER_ENTRIES_API_URL = `${API_BASE_URL}/planner-entries`;
 const PLANNER_STATE_API_URL = `${API_BASE_URL}/planner-state`;
+const USERS_API_URL = `${API_BASE_URL}/users`;
+const USER_SIGN_IN_API_URL = `${USERS_API_URL}/sign-in`;
+const USER_STORAGE_KEY = "shahdad-todo-user-initials";
+const INITIALS_PATTERN = /^[A-Z]{2}$/;
 const APP_STATE_POLL_INTERVAL_MS = 5000;
 const GENERAL_SECTION_KEY = "general";
 const WEEKEND_SECTION_KEY = "weekend-goals";
-const ESS_SECTION_KEY = "ess-planner";
-const PLANNER_SECTION_KEYS = [WEEKEND_SECTION_KEY, ESS_SECTION_KEY];
+const PLANNER_SECTION_KEYS = [WEEKEND_SECTION_KEY];
 const PLANNER_SECTION_KEY_SET = new Set(PLANNER_SECTION_KEYS);
 const SECTION_CONFIG = {
   [GENERAL_SECTION_KEY]: {
@@ -33,22 +36,6 @@ const SECTION_CONFIG = {
     archiveSelectionPrompt: "Choose an archived weekend entry to view its tasks.",
     archiveNoSelectionMessage: "Select an archived weekend entry",
     archiveNoEntryMessage: "No archived weekend entries yet."
-  },
-  [ESS_SECTION_KEY]: {
-    title: "ESS planner",
-    createButtonLabel: "New ESS Entry",
-    archiveButtonLabel: "Archives",
-    datePickerLabel: "Choose an ESS entry date",
-    emptyPlannerMessage: "No ESS planner entries yet. Create one for your next Tuesday or Thursday.",
-    selectionPrompt: "Choose an ESS entry to start planning.",
-    noSelectionMessage: "Select an ESS day first",
-    noEntryMessage: "Create an ESS entry first",
-    taskEmptyMessage: "No tasks for this ESS entry yet.",
-    legacyEntryName: "Existing ESS Planner",
-    archiveEmptyMessage: "No archived ESS entries yet.",
-    archiveSelectionPrompt: "Choose an archived ESS entry to view its tasks.",
-    archiveNoSelectionMessage: "Select an archived ESS entry",
-    archiveNoEntryMessage: "No archived ESS entries yet."
   }
 };
 
@@ -73,6 +60,16 @@ const plannerDatePickerShell = document.getElementById("planner-date-picker-shel
 const plannerDatePicker = document.getElementById("planner-date-picker");
 const plannerDatePickerTitle = document.getElementById("planner-date-picker-title");
 const plannerDatePickerGrid = document.getElementById("planner-date-picker-grid");
+const authCard = document.getElementById("auth-card");
+const authForm = document.getElementById("auth-form");
+const authInput = document.getElementById("auth-input");
+const authSignInButton = document.getElementById("auth-sign-in");
+const authCreateButton = document.getElementById("auth-create");
+const authMessage = document.getElementById("auth-message");
+const appShell = document.getElementById("app-shell");
+const userBar = document.getElementById("user-bar");
+const userChip = document.getElementById("user-chip");
+const logoutButton = document.getElementById("logout-button");
 const MONTH_TITLE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   month: "long",
   year: "numeric"
@@ -106,13 +103,37 @@ let isPlannerEntryCreationPending = false;
 let lastAppStateSignature = "";
 let appStatePollIntervalId = null;
 let isAppStatePollInFlight = false;
+let currentUserInitials = loadStoredUserInitials();
+let isAuthRequestPending = false;
 
-renderSectionState();
-renderPlannerControls();
-renderTasks();
-renderPlannerDatePicker();
-initializeApp();
-startAppStatePolling();
+renderAuthState();
+
+if (currentUserInitials) {
+  startApp();
+} else {
+  authInput.focus();
+}
+
+authInput.addEventListener("input", function () {
+  const cleanedValue = authInput.value.replace(/[^a-zA-Z]/g, "").slice(0, 2).toUpperCase();
+
+  if (authInput.value !== cleanedValue) {
+    authInput.value = cleanedValue;
+  }
+});
+
+authForm.addEventListener("submit", function (event) {
+  event.preventDefault();
+  void submitAuthRequest(USER_SIGN_IN_API_URL, "Could not sign in.");
+});
+
+authCreateButton.addEventListener("click", function () {
+  void submitAuthRequest(USERS_API_URL, "Could not create the account.");
+});
+
+logoutButton.addEventListener("click", function () {
+  logOutUser("");
+});
 
 todoArchiveToggle.addEventListener("click", function () {
   if (activeSection !== GENERAL_SECTION_KEY) {
@@ -660,6 +681,181 @@ function updateTaskCount(taskItems) {
   taskCount.textContent = String(remainingTasks);
 }
 
+function startApp() {
+  isAppLoading = true;
+  appLoadErrorMessage = "";
+  lastAppStateSignature = "";
+  tasksBySection = createEmptySections();
+  archiveViewBySection = createArchiveViewState();
+  renderSectionState();
+  renderPlannerControls();
+  renderTasks();
+  renderPlannerDatePicker();
+  initializeApp();
+  startAppStatePolling();
+}
+
+function renderAuthState() {
+  const isSignedIn = Boolean(currentUserInitials);
+
+  authCard.classList.toggle("is-hidden", isSignedIn);
+  appShell.classList.toggle("is-hidden", !isSignedIn);
+  userBar.classList.toggle("is-hidden", !isSignedIn);
+
+  if (isSignedIn) {
+    userChip.textContent = currentUserInitials;
+  }
+}
+
+async function submitAuthRequest(url, fallbackMessage) {
+  if (isAuthRequestPending) {
+    return;
+  }
+
+  const initials = authInput.value.trim().toUpperCase();
+
+  if (!INITIALS_PATTERN.test(initials)) {
+    authMessage.textContent = "Enter exactly two letters.";
+    authInput.focus();
+    return;
+  }
+
+  isAuthRequestPending = true;
+  setAuthControlsDisabled(true);
+  authMessage.textContent = "";
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ initials: initials })
+    });
+    const data = await response.json().catch(function () {
+      return null;
+    });
+
+    if (!response.ok) {
+      authMessage.textContent = (data && data.error) || fallbackMessage;
+      authInput.focus();
+      return;
+    }
+
+    currentUserInitials = (data && data.initials) || initials;
+    storeUserInitials(currentUserInitials);
+    authMessage.textContent = "";
+    authInput.value = "";
+    renderAuthState();
+    startApp();
+  } catch (error) {
+    console.error(fallbackMessage, error);
+    authMessage.textContent = "Could not reach the server. Please try again.";
+  } finally {
+    isAuthRequestPending = false;
+    setAuthControlsDisabled(false);
+  }
+}
+
+function setAuthControlsDisabled(isDisabled) {
+  authInput.disabled = isDisabled;
+  authSignInButton.disabled = isDisabled;
+  authCreateButton.disabled = isDisabled;
+}
+
+function logOutUser(message) {
+  currentUserInitials = "";
+  clearStoredUserInitials();
+  stopAppStatePolling();
+  closePlannerDatePicker();
+  resetDragState();
+  tasksBySection = createEmptySections();
+  lastAppStateSignature = "";
+  isAppLoading = true;
+  appLoadErrorMessage = "";
+  archiveViewBySection = createArchiveViewState();
+  formMessage.textContent = "";
+  renderAuthState();
+  authMessage.textContent = message || "";
+  authInput.value = "";
+  authInput.focus();
+}
+
+function handleUnauthorized() {
+  if (!currentUserInitials) {
+    return;
+  }
+
+  logOutUser("Your session ended. Sign in with your initials again.");
+}
+
+async function apiFetch(url, options) {
+  const config = { ...(options || {}) };
+  config.headers = getUserRequestHeaders(config.headers);
+
+  const response = await fetch(url, config);
+
+  if (response.status === 401) {
+    handleUnauthorized();
+    throw new Error("Your session ended. Sign in with your initials again.");
+  }
+
+  return response;
+}
+
+function getUserRequestHeaders(additionalHeaders) {
+  const headers = { ...(additionalHeaders || {}) };
+
+  if (currentUserInitials) {
+    headers["X-User-Initials"] = currentUserInitials;
+  }
+
+  return headers;
+}
+
+function loadStoredUserInitials() {
+  try {
+    const storedValue = localStorage.getItem(USER_STORAGE_KEY);
+
+    if (typeof storedValue === "string") {
+      const initials = storedValue.trim().toUpperCase();
+
+      if (INITIALS_PATTERN.test(initials)) {
+        return initials;
+      }
+    }
+  } catch (error) {
+    console.error("Could not read stored initials.", error);
+  }
+
+  return "";
+}
+
+function storeUserInitials(initials) {
+  try {
+    localStorage.setItem(USER_STORAGE_KEY, initials);
+  } catch (error) {
+    console.error("Could not store initials.", error);
+  }
+}
+
+function clearStoredUserInitials() {
+  try {
+    localStorage.removeItem(USER_STORAGE_KEY);
+  } catch (error) {
+    console.error("Could not clear stored initials.", error);
+  }
+}
+
+function stopAppStatePolling() {
+  if (!appStatePollIntervalId) {
+    return;
+  }
+
+  window.clearInterval(appStatePollIntervalId);
+  appStatePollIntervalId = null;
+}
+
 async function initializeApp() {
   try {
     tasksBySection = await loadTasksBySectionFromApi();
@@ -680,7 +876,7 @@ async function initializeApp() {
 }
 
 async function loadTasksBySectionFromApi() {
-  const response = await fetch(APP_STATE_API_URL, {
+  const response = await apiFetch(APP_STATE_API_URL, {
     cache: "no-store"
   });
 
@@ -760,7 +956,7 @@ async function refreshAppStateFromApi() {
 }
 
 async function createTaskOnApi(taskPayload) {
-  const response = await fetch(TASKS_API_URL, {
+  const response = await apiFetch(TASKS_API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -793,7 +989,7 @@ async function mutateAppStateOnApi(url, options) {
     requestOptions.body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(url, requestOptions);
+  const response = await apiFetch(url, requestOptions);
   const responseData = await response.json().catch(function () {
     return null;
   });
@@ -826,7 +1022,7 @@ async function selectPlannerEntry(sectionKey, entryId) {
 }
 
 async function createPlannerEntryOnApi(plannerEntryPayload) {
-  const response = await fetch(PLANNER_ENTRIES_API_URL, {
+  const response = await apiFetch(PLANNER_ENTRIES_API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -853,10 +1049,6 @@ function createEmptySections() {
     [WEEKEND_SECTION_KEY]: {
       entries: [],
       activeEntryId: null
-    },
-    [ESS_SECTION_KEY]: {
-      entries: [],
-      activeEntryId: null
     }
   };
 }
@@ -868,11 +1060,6 @@ function normalizeSections(sectionMap) {
       sectionMap[WEEKEND_SECTION_KEY],
       SECTION_CONFIG[WEEKEND_SECTION_KEY],
       WEEKEND_SECTION_KEY
-    ),
-    [ESS_SECTION_KEY]: normalizePlannerSection(
-      sectionMap[ESS_SECTION_KEY],
-      SECTION_CONFIG[ESS_SECTION_KEY],
-      ESS_SECTION_KEY
     )
   };
 }
@@ -1607,10 +1794,6 @@ async function createPlannerEntryFromDate(sectionKey, selectedDate) {
     return false;
   }
 
-  if (sectionKey !== WEEKEND_SECTION_KEY) {
-    return createAndApplyPlannerEntry(sectionKey, entryDescriptor);
-  }
-
   const planner = getPlannerData(sectionKey);
   const existingEntry = planner.entries.find(function (entry) {
     return entry.sortKey === entryDescriptor.sortKey && !entry.deleted;
@@ -1625,28 +1808,20 @@ async function createPlannerEntryFromDate(sectionKey, selectedDate) {
 }
 
 function getPlannerEntryDescriptorFromDate(sectionKey, selectedDate) {
-  if (sectionKey === WEEKEND_SECTION_KEY) {
-    const weekendStartDate = getWeekendStartDate(selectedDate);
-
-    if (!weekendStartDate) {
-      formMessage.textContent = "Pick a Saturday or Sunday to create a Weekend Goals entry.";
-      return null;
-    }
-
-    return {
-      name: formatWeekendEntryDate(weekendStartDate),
-      sortKey: getStartOfDay(weekendStartDate).getTime()
-    };
+  if (sectionKey !== WEEKEND_SECTION_KEY) {
+    return null;
   }
 
-  if (sectionKey === ESS_SECTION_KEY && !isEssPlannerDateSelectable(selectedDate)) {
-    formMessage.textContent = "Pick a Tuesday or Thursday to create an ESS entry.";
+  const weekendStartDate = getWeekendStartDate(selectedDate);
+
+  if (!weekendStartDate) {
+    formMessage.textContent = "Pick a Saturday or Sunday to create a Weekend Goals entry.";
     return null;
   }
 
   return {
-    name: formatPlannerEntryDate(selectedDate),
-    sortKey: getStartOfDay(selectedDate).getTime()
+    name: formatWeekendEntryDate(weekendStartDate),
+    sortKey: getStartOfDay(weekendStartDate).getTime()
   };
 }
 
@@ -1692,33 +1867,11 @@ function getPlannerEntrySortKey(entry, entryName, sectionKey) {
 }
 
 function inferPlannerEntrySortKey(entryName, sectionKey) {
-  if (sectionKey === ESS_SECTION_KEY) {
-    return inferEssPlannerSortKey(entryName);
-  }
-
   if (sectionKey === WEEKEND_SECTION_KEY) {
     return inferWeekendPlannerSortKey(entryName);
   }
 
   return 0;
-}
-
-function inferEssPlannerSortKey(entryName) {
-  const essMatch = entryName.match(/^([A-Z][a-z]{2}) (\d{1,2}), (\d{2})'$/);
-
-  if (!essMatch) {
-    return 0;
-  }
-
-  const monthIndex = MONTH_INDEX_BY_LABEL[essMatch[1]];
-  const dayOfMonth = Number(essMatch[2]);
-  const fullYear = 2000 + Number(essMatch[3]);
-
-  if (monthIndex === undefined || Number.isNaN(dayOfMonth) || Number.isNaN(fullYear)) {
-    return 0;
-  }
-
-  return createCalendarDate(fullYear, monthIndex, dayOfMonth).getTime();
 }
 
 function inferWeekendPlannerSortKey(entryName) {
@@ -1907,10 +2060,6 @@ function closePlannerDatePicker() {
   plannerCreateButton.setAttribute("aria-expanded", "false");
 }
 
-function formatPlannerEntryDate(date) {
-  return `${getEssWeekdayLabel(date)}, ${ENTRY_MONTH_FORMATTER.format(date)} ${date.getDate()}, ${date.getFullYear()}`;
-}
-
 function formatWeekendEntryDate(weekendStartDate) {
   const weekendEndDate = createCalendarDate(
     weekendStartDate.getFullYear(),
@@ -1984,25 +2133,12 @@ function getWeekendStartDate(date) {
   return null;
 }
 
-function getEssWeekdayLabel(date) {
-  return date.getDay() === 2 ? "Tue" : "Thurs";
-}
-
 function isPlannerCalendarDateSelectable(sectionKey, date) {
   if (sectionKey === WEEKEND_SECTION_KEY) {
     return isWeekendPlannerDateSelectable(date);
   }
 
-  if (sectionKey === ESS_SECTION_KEY) {
-    return isEssPlannerDateSelectable(date);
-  }
-
   return true;
-}
-
-function isEssPlannerDateSelectable(date) {
-  const dayOfWeek = date.getDay();
-  return dayOfWeek === 2 || dayOfWeek === 4;
 }
 
 function isWeekendPlannerDateSelectable(date) {
@@ -2066,8 +2202,7 @@ function supportsPlannerArchives(sectionKey) {
 function createArchiveViewState() {
   return {
     [GENERAL_SECTION_KEY]: false,
-    [WEEKEND_SECTION_KEY]: false,
-    [ESS_SECTION_KEY]: false
+    [WEEKEND_SECTION_KEY]: false
   };
 }
 

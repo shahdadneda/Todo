@@ -2,10 +2,12 @@ const express = require("express");
 const {
   createPlannerEntry,
   createTask,
+  createUser,
   databasePath,
   deletePlannerEntry,
   deleteTask,
   getAppState,
+  getUserByInitials,
   openDatabase,
   reorderTasks,
   setPlannerSelection,
@@ -44,7 +46,8 @@ app.use(function (request, response, next) {
   }
 
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-User-Initials");
+  response.setHeader("Access-Control-Max-Age", "86400");
 
   if (request.method === "OPTIONS") {
     if (origin && !isAllowedOrigin) {
@@ -70,15 +73,82 @@ app.use(function (request, response, next) {
 
 app.use(express.json());
 
+function requireUser(request, response, next) {
+  const user = getUserByInitials(db, request.get("X-User-Initials") || "");
+
+  if (!user) {
+    response.status(401).json({
+      error: "Sign in with your two-letter initials to continue."
+    });
+    return;
+  }
+
+  request.user = user;
+  next();
+}
+
+["/api/tasks", "/api/planner-entries", "/api/planner-state", "/api/app-state"].forEach(function (path) {
+  app.use(path, requireUser);
+});
+
 app.get("/api/health", function (request, response) {
   response.json({
     ok: true
   });
 });
 
+app.post("/api/users", function (request, response) {
+  try {
+    const user = createUser(db, (request.body || {}).initials);
+
+    response.status(201).json({
+      initials: user.initials
+    });
+  } catch (error) {
+    if (error.status) {
+      response.status(error.status).json({
+        error: error.message
+      });
+      return;
+    }
+
+    console.error("Could not create user.", error);
+    response.status(500).json({
+      error: "Could not create the account."
+    });
+  }
+});
+
+app.post("/api/users/sign-in", function (request, response) {
+  try {
+    const rawInitials = (request.body || {}).initials;
+    const user = getUserByInitials(db, typeof rawInitials === "string" ? rawInitials : "");
+
+    if (!user) {
+      const initialsLabel = typeof rawInitials === "string" && rawInitials.trim()
+        ? rawInitials.trim().toUpperCase()
+        : "those initials";
+
+      response.status(404).json({
+        error: `No account found for ${initialsLabel} yet. Tap Create account to claim it.`
+      });
+      return;
+    }
+
+    response.json({
+      initials: user.initials
+    });
+  } catch (error) {
+    console.error("Could not sign in.", error);
+    response.status(500).json({
+      error: "Could not sign in."
+    });
+  }
+});
+
 app.post("/api/tasks", function (request, response) {
   try {
-    const task = createTask(db, request.body || {});
+    const task = createTask(db, request.user.id, request.body || {});
 
     response.status(201).json(task);
   } catch (error) {
@@ -98,7 +168,7 @@ app.post("/api/tasks", function (request, response) {
 
 app.post("/api/planner-entries", function (request, response) {
   try {
-    const plannerEntry = createPlannerEntry(db, request.body || {});
+    const plannerEntry = createPlannerEntry(db, request.user.id, request.body || {});
 
     response.status(201).json(plannerEntry);
   } catch (error) {
@@ -118,8 +188,8 @@ app.post("/api/planner-entries", function (request, response) {
 
 app.post("/api/tasks/reorder", function (request, response) {
   try {
-    reorderTasks(db, request.body || {});
-    response.json(getAppState(db));
+    reorderTasks(db, request.user.id, request.body || {});
+    response.json(getAppState(db, request.user.id));
   } catch (error) {
     if (error.status) {
       response.status(error.status).json({
@@ -137,8 +207,8 @@ app.post("/api/tasks/reorder", function (request, response) {
 
 app.patch("/api/tasks/:taskId", function (request, response) {
   try {
-    updateTask(db, request.params.taskId, request.body || {});
-    response.json(getAppState(db));
+    updateTask(db, request.user.id, request.params.taskId, request.body || {});
+    response.json(getAppState(db, request.user.id));
   } catch (error) {
     if (error.status) {
       response.status(error.status).json({
@@ -156,8 +226,8 @@ app.patch("/api/tasks/:taskId", function (request, response) {
 
 app.delete("/api/tasks/:taskId", function (request, response) {
   try {
-    deleteTask(db, request.params.taskId);
-    response.json(getAppState(db));
+    deleteTask(db, request.user.id, request.params.taskId);
+    response.json(getAppState(db, request.user.id));
   } catch (error) {
     if (error.status) {
       response.status(error.status).json({
@@ -175,8 +245,8 @@ app.delete("/api/tasks/:taskId", function (request, response) {
 
 app.patch("/api/planner-state", function (request, response) {
   try {
-    setPlannerSelection(db, request.body || {});
-    response.json(getAppState(db));
+    setPlannerSelection(db, request.user.id, request.body || {});
+    response.json(getAppState(db, request.user.id));
   } catch (error) {
     if (error.status) {
       response.status(error.status).json({
@@ -194,8 +264,8 @@ app.patch("/api/planner-state", function (request, response) {
 
 app.patch("/api/planner-entries/:entryId", function (request, response) {
   try {
-    updatePlannerEntry(db, request.params.entryId, request.body || {});
-    response.json(getAppState(db));
+    updatePlannerEntry(db, request.user.id, request.params.entryId, request.body || {});
+    response.json(getAppState(db, request.user.id));
   } catch (error) {
     if (error.status) {
       response.status(error.status).json({
@@ -213,8 +283,8 @@ app.patch("/api/planner-entries/:entryId", function (request, response) {
 
 app.delete("/api/planner-entries/:entryId", function (request, response) {
   try {
-    deletePlannerEntry(db, request.params.entryId);
-    response.json(getAppState(db));
+    deletePlannerEntry(db, request.user.id, request.params.entryId);
+    response.json(getAppState(db, request.user.id));
   } catch (error) {
     if (error.status) {
       response.status(error.status).json({
@@ -232,7 +302,7 @@ app.delete("/api/planner-entries/:entryId", function (request, response) {
 
 app.get("/api/app-state", function (request, response) {
   try {
-    response.json(getAppState(db));
+    response.json(getAppState(db, request.user.id));
   } catch (error) {
     console.error("Could not load app state.", error);
     response.status(500).json({

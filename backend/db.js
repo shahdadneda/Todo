@@ -6,6 +6,9 @@ const dataDirectoryPath = path.join(__dirname, "data");
 const databasePath = path.join(dataDirectoryPath, "todo.sqlite");
 const schemaPath = path.join(__dirname, "schema.sql");
 
+const LEGACY_USER_INITIALS = "SN";
+const INITIALS_PATTERN = /^[A-Z]{2}$/;
+
 function openDatabase() {
   fs.mkdirSync(dataDirectoryPath, { recursive: true });
 
@@ -13,46 +16,184 @@ function openDatabase() {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(fs.readFileSync(schemaPath, "utf8"));
 
-  seedPlannerState(db);
+  migrateDatabaseToUserAccounts(db);
 
   return db;
 }
 
-function seedPlannerState(db) {
-  const insertPlannerState = db.prepare(`
-    INSERT OR IGNORE INTO planner_state (section_key, active_entry_id)
-    VALUES (?, NULL)
-  `);
+function migrateDatabaseToUserAccounts(db) {
+  if (!tableHasColumn(db, "tasks", "user_id")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE");
+  }
 
-  insertPlannerState.run("weekend-goals");
-  insertPlannerState.run("ess-planner");
+  if (!tableHasColumn(db, "planner_entries", "user_id")) {
+    db.exec("ALTER TABLE planner_entries ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE");
+  }
+
+  const legacyUserId = ensureLegacyUserForOrphanedData(db);
+
+  if (!tableHasColumn(db, "planner_state", "user_id")) {
+    rebuildPlannerStateForUsers(db, legacyUserId);
+  }
+
+  if (legacyUserId !== null) {
+    db.prepare("UPDATE tasks SET user_id = ? WHERE user_id IS NULL").run(legacyUserId);
+    db.prepare("UPDATE planner_entries SET user_id = ? WHERE user_id IS NULL").run(legacyUserId);
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_user_section
+    ON tasks (user_id, section_key, position, id);
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_planner_entries_user
+    ON planner_entries (user_id, section_key, sort_key DESC, id DESC);
+  `);
 }
 
-function getAppState(db) {
+function ensureLegacyUserForOrphanedData(db) {
+  const orphanCountRow = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM tasks WHERE user_id IS NULL) +
+      (SELECT COUNT(*) FROM planner_entries WHERE user_id IS NULL) AS orphan_count
+  `).get();
+
+  if (!orphanCountRow || orphanCountRow.orphan_count === 0) {
+    return null;
+  }
+
+  const existingUser = db.prepare(`
+    SELECT id FROM users WHERE initials = ?
+  `).get(LEGACY_USER_INITIALS);
+
+  if (existingUser) {
+    return existingUser.id;
+  }
+
+  const insertResult = db.prepare(`
+    INSERT INTO users (initials) VALUES (?)
+  `).run(LEGACY_USER_INITIALS);
+
+  return Number(insertResult.lastInsertRowid);
+}
+
+function rebuildPlannerStateForUsers(db, legacyUserId) {
+  db.exec("BEGIN");
+
+  try {
+    db.exec(`
+      CREATE TABLE planner_state_users (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        section_key TEXT NOT NULL CHECK (section_key IN ('weekend-goals', 'ess-planner')),
+        active_entry_id INTEGER REFERENCES planner_entries(id) ON DELETE SET NULL,
+        PRIMARY KEY (user_id, section_key)
+      );
+    `);
+
+    if (legacyUserId !== null) {
+      db.prepare(`
+        INSERT INTO planner_state_users (user_id, section_key, active_entry_id)
+        SELECT ?, section_key, active_entry_id
+        FROM planner_state
+        WHERE active_entry_id IS NOT NULL
+      `).run(legacyUserId);
+    }
+
+    db.exec("DROP TABLE planner_state");
+    db.exec("ALTER TABLE planner_state_users RENAME TO planner_state");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function tableHasColumn(db, tableName, columnName) {
+  const columnRow = db.prepare(`
+    SELECT name FROM pragma_table_info(?) WHERE name = ?
+  `).get(tableName, columnName);
+
+  return columnRow !== undefined;
+}
+
+function normalizeInitials(rawInitials) {
+  if (typeof rawInitials !== "string") {
+    return null;
+  }
+
+  const initials = rawInitials.trim().toUpperCase();
+
+  return INITIALS_PATTERN.test(initials) ? initials : null;
+}
+
+function getUserByInitials(db, rawInitials) {
+  const initials = normalizeInitials(rawInitials);
+
+  if (!initials) {
+    return null;
+  }
+
+  const userRow = db.prepare(`
+    SELECT id, initials FROM users WHERE initials = ?
+  `).get(initials);
+
+  return userRow || null;
+}
+
+function createUser(db, rawInitials) {
+  const initials = normalizeInitials(rawInitials);
+
+  if (!initials) {
+    throw createHttpError(400, "Initials must be exactly two letters (A to Z).");
+  }
+
+  const existingUser = db.prepare(`
+    SELECT id FROM users WHERE initials = ?
+  `).get(initials);
+
+  if (existingUser) {
+    throw createHttpError(409, `${initials} is already taken. Pick a different two-letter combo.`);
+  }
+
+  const insertResult = db.prepare(`
+    INSERT INTO users (initials) VALUES (?)
+  `).run(initials);
+
+  return {
+    id: Number(insertResult.lastInsertRowid),
+    initials: initials
+  };
+}
+
+function getAppState(db, userId) {
   const generalTasks = db.prepare(`
     SELECT id, text, completed, archived
     FROM tasks
     WHERE section_key = 'general'
+      AND user_id = ?
     ORDER BY position ASC, id DESC
-  `).all().map(mapTaskRow);
+  `).all(userId).map(mapTaskRow);
 
   const plannerStateRows = db.prepare(`
     SELECT section_key, active_entry_id
     FROM planner_state
-  `).all();
+    WHERE user_id = ?
+  `).all(userId);
 
   const plannerEntries = db.prepare(`
     SELECT id, section_key, name, archived, deleted, sort_key
     FROM planner_entries
+    WHERE user_id = ?
     ORDER BY sort_key DESC, id DESC
-  `).all();
+  `).all(userId);
 
   const plannerTaskRows = db.prepare(`
     SELECT id, planner_entry_id, text, completed, archived
     FROM tasks
     WHERE planner_entry_id IS NOT NULL
+      AND user_id = ?
     ORDER BY position ASC, id DESC
-  `).all();
+  `).all(userId);
 
   const activeEntryIdBySection = new Map(
     plannerStateRows.map(function (row) {
@@ -77,7 +218,7 @@ function getAppState(db) {
   };
 }
 
-function createTask(db, taskInput) {
+function createTask(db, userId, taskInput) {
   const sectionKey = typeof taskInput.sectionKey === "string" ? taskInput.sectionKey : "";
   const text = typeof taskInput.text === "string" ? taskInput.text.trim() : "";
   const plannerEntryId = normalizePlannerEntryId(taskInput.plannerEntryId);
@@ -109,7 +250,8 @@ function createTask(db, taskInput) {
       SELECT id, section_key
       FROM planner_entries
       WHERE id = ?
-    `).get(plannerEntryId);
+        AND user_id = ?
+    `).get(plannerEntryId, userId);
 
     if (!plannerEntry || plannerEntry.section_key !== sectionKey) {
       throw createHttpError(404, "Planner entry not found.");
@@ -118,12 +260,12 @@ function createTask(db, taskInput) {
     resolvedPlannerEntryId = plannerEntry.id;
   }
 
-  const position = getNextTaskPosition(db, sectionKey, resolvedPlannerEntryId);
+  const position = getNextTaskPosition(db, userId, sectionKey, resolvedPlannerEntryId);
   const insertTask = db.prepare(`
-    INSERT INTO tasks (section_key, planner_entry_id, text, completed, archived, position)
-    VALUES (?, ?, ?, 0, 0, ?)
+    INSERT INTO tasks (user_id, section_key, planner_entry_id, text, completed, archived, position)
+    VALUES (?, ?, ?, ?, 0, 0, ?)
   `);
-  const insertResult = insertTask.run(sectionKey, resolvedPlannerEntryId, text, position);
+  const insertResult = insertTask.run(userId, sectionKey, resolvedPlannerEntryId, text, position);
   const createdTaskRow = db.prepare(`
     SELECT id, text, completed, archived
     FROM tasks
@@ -133,7 +275,7 @@ function createTask(db, taskInput) {
   return mapTaskRow(createdTaskRow);
 }
 
-function createPlannerEntry(db, plannerEntryInput) {
+function createPlannerEntry(db, userId, plannerEntryInput) {
   const sectionKey = typeof plannerEntryInput.sectionKey === "string" ? plannerEntryInput.sectionKey : "";
   const name = typeof plannerEntryInput.name === "string" ? plannerEntryInput.name.trim() : "";
   const sortKey = normalizeSortKey(plannerEntryInput.sortKey);
@@ -157,34 +299,36 @@ function createPlannerEntry(db, plannerEntryInput) {
       WHERE section_key = ?
         AND sort_key = ?
         AND deleted = 0
+        AND user_id = ?
       ORDER BY id DESC
       LIMIT 1
-    `).get(sectionKey, sortKey);
+    `).get(sectionKey, sortKey, userId);
 
     if (existingEntry) {
-      setActivePlannerEntry(db, sectionKey, existingEntry.id);
-      return getPlannerEntryById(db, existingEntry.id);
+      setActivePlannerEntry(db, userId, sectionKey, existingEntry.id);
+      return getPlannerEntryById(db, userId, existingEntry.id);
     }
   }
 
   const insertPlannerEntry = db.prepare(`
-    INSERT INTO planner_entries (section_key, name, archived, deleted, sort_key)
-    VALUES (?, ?, 0, 0, ?)
+    INSERT INTO planner_entries (user_id, section_key, name, archived, deleted, sort_key)
+    VALUES (?, ?, ?, 0, 0, ?)
   `);
-  const insertResult = insertPlannerEntry.run(sectionKey, name, sortKey);
+  const insertResult = insertPlannerEntry.run(userId, sectionKey, name, sortKey);
 
-  setActivePlannerEntry(db, sectionKey, insertResult.lastInsertRowid);
+  setActivePlannerEntry(db, userId, sectionKey, insertResult.lastInsertRowid);
 
-  return getPlannerEntryById(db, insertResult.lastInsertRowid);
+  return getPlannerEntryById(db, userId, insertResult.lastInsertRowid);
 }
 
-function updateTask(db, taskId, taskInput) {
+function updateTask(db, userId, taskId, taskInput) {
   const normalizedTaskId = normalizePlannerEntryId(taskId);
   const existingTask = db.prepare(`
     SELECT id, section_key, planner_entry_id, completed, archived
     FROM tasks
     WHERE id = ?
-  `).get(normalizedTaskId);
+      AND user_id = ?
+  `).get(normalizedTaskId, userId);
 
   if (!existingTask) {
     throw createHttpError(404, "Task not found.");
@@ -204,6 +348,7 @@ function updateTask(db, taskId, taskInput) {
   if (hasCompletedUpdate) {
     reorderTaskScopeForCompletion(
       db,
+      userId,
       existingTask.section_key,
       existingTask.planner_entry_id,
       existingTask.id,
@@ -220,19 +365,20 @@ function updateTask(db, taskId, taskInput) {
   }
 }
 
-function deleteTask(db, taskId) {
+function deleteTask(db, userId, taskId) {
   const normalizedTaskId = normalizePlannerEntryId(taskId);
   const deleteResult = db.prepare(`
     DELETE FROM tasks
     WHERE id = ?
-  `).run(normalizedTaskId);
+      AND user_id = ?
+  `).run(normalizedTaskId, userId);
 
   if (deleteResult.changes === 0) {
     throw createHttpError(404, "Task not found.");
   }
 }
 
-function setPlannerSelection(db, selectionInput) {
+function setPlannerSelection(db, userId, selectionInput) {
   const sectionKey = typeof selectionInput.sectionKey === "string" ? selectionInput.sectionKey : "";
   const activeEntryId = normalizePlannerEntryId(selectionInput.activeEntryId);
 
@@ -241,7 +387,7 @@ function setPlannerSelection(db, selectionInput) {
   }
 
   if (activeEntryId === null) {
-    setActivePlannerEntry(db, sectionKey, null);
+    setActivePlannerEntry(db, userId, sectionKey, null);
     return;
   }
 
@@ -249,22 +395,24 @@ function setPlannerSelection(db, selectionInput) {
     SELECT id, section_key
     FROM planner_entries
     WHERE id = ?
-  `).get(activeEntryId);
+      AND user_id = ?
+  `).get(activeEntryId, userId);
 
   if (!plannerEntry || plannerEntry.section_key !== sectionKey) {
     throw createHttpError(404, "Planner entry not found.");
   }
 
-  setActivePlannerEntry(db, sectionKey, plannerEntry.id);
+  setActivePlannerEntry(db, userId, sectionKey, plannerEntry.id);
 }
 
-function updatePlannerEntry(db, entryId, plannerEntryInput) {
+function updatePlannerEntry(db, userId, entryId, plannerEntryInput) {
   const normalizedEntryId = normalizePlannerEntryId(entryId);
   const plannerEntry = db.prepare(`
     SELECT id, section_key, archived
     FROM planner_entries
     WHERE id = ?
-  `).get(normalizedEntryId);
+      AND user_id = ?
+  `).get(normalizedEntryId, userId);
 
   if (!plannerEntry) {
     throw createHttpError(404, "Planner entry not found.");
@@ -283,21 +431,23 @@ function updatePlannerEntry(db, entryId, plannerEntryInput) {
   const plannerState = db.prepare(`
     SELECT active_entry_id
     FROM planner_state
-    WHERE section_key = ?
-  `).get(plannerEntry.section_key);
+    WHERE user_id = ?
+      AND section_key = ?
+  `).get(userId, plannerEntry.section_key);
 
   if (plannerState && normalizePlannerEntryId(plannerState.active_entry_id) === plannerEntry.id) {
-    setActivePlannerEntry(db, plannerEntry.section_key, null);
+    setActivePlannerEntry(db, userId, plannerEntry.section_key, null);
   }
 }
 
-function deletePlannerEntry(db, entryId) {
+function deletePlannerEntry(db, userId, entryId) {
   const normalizedEntryId = normalizePlannerEntryId(entryId);
   const plannerEntry = db.prepare(`
     SELECT id, section_key
     FROM planner_entries
     WHERE id = ?
-  `).get(normalizedEntryId);
+      AND user_id = ?
+  `).get(normalizedEntryId, userId);
 
   if (!plannerEntry) {
     throw createHttpError(404, "Planner entry not found.");
@@ -311,15 +461,16 @@ function deletePlannerEntry(db, entryId) {
   const plannerState = db.prepare(`
     SELECT active_entry_id
     FROM planner_state
-    WHERE section_key = ?
-  `).get(plannerEntry.section_key);
+    WHERE user_id = ?
+      AND section_key = ?
+  `).get(userId, plannerEntry.section_key);
 
   if (plannerState && normalizePlannerEntryId(plannerState.active_entry_id) === plannerEntry.id) {
-    setActivePlannerEntry(db, plannerEntry.section_key, null);
+    setActivePlannerEntry(db, userId, plannerEntry.section_key, null);
   }
 }
 
-function reorderTasks(db, reorderInput) {
+function reorderTasks(db, userId, reorderInput) {
   const sectionKey = typeof reorderInput.sectionKey === "string" ? reorderInput.sectionKey : "";
   const plannerEntryId = normalizePlannerEntryId(reorderInput.plannerEntryId);
   const orderedTaskIds = Array.isArray(reorderInput.orderedTaskIds)
@@ -354,14 +505,15 @@ function reorderTasks(db, reorderInput) {
       SELECT id, section_key
       FROM planner_entries
       WHERE id = ?
-    `).get(plannerEntryId);
+        AND user_id = ?
+    `).get(plannerEntryId, userId);
 
     if (!plannerEntry || plannerEntry.section_key !== sectionKey) {
       throw createHttpError(404, "Planner entry not found.");
     }
   }
 
-  const scopeRows = getTaskScopeRows(db, sectionKey, plannerEntryId);
+  const scopeRows = getTaskScopeRows(db, userId, sectionKey, plannerEntryId);
   const reorderedRows = getReorderedTaskScopeRows(scopeRows, orderedTaskIds, visibleArchived);
 
   db.exec("BEGIN");
@@ -384,19 +536,21 @@ function reorderTasks(db, reorderInput) {
   }
 }
 
-function getNextTaskPosition(db, sectionKey, plannerEntryId) {
+function getNextTaskPosition(db, userId, sectionKey, plannerEntryId) {
   const existingPositionRow = plannerEntryId === null
     ? db.prepare(`
         SELECT MIN(position) AS min_position
         FROM tasks
         WHERE section_key = ?
           AND planner_entry_id IS NULL
-      `).get(sectionKey)
+          AND user_id = ?
+      `).get(sectionKey, userId)
     : db.prepare(`
         SELECT MIN(position) AS min_position
         FROM tasks
         WHERE planner_entry_id = ?
-      `).get(plannerEntryId);
+          AND user_id = ?
+      `).get(plannerEntryId, userId);
 
   if (!existingPositionRow || existingPositionRow.min_position === null) {
     return 0;
@@ -405,8 +559,8 @@ function getNextTaskPosition(db, sectionKey, plannerEntryId) {
   return existingPositionRow.min_position - 1;
 }
 
-function reorderTaskScopeForCompletion(db, sectionKey, plannerEntryId, taskId, isCompleted) {
-  const taskRows = getTaskScopeRows(db, sectionKey, plannerEntryId);
+function reorderTaskScopeForCompletion(db, userId, sectionKey, plannerEntryId, taskId, isCompleted) {
+  const taskRows = getTaskScopeRows(db, userId, sectionKey, plannerEntryId);
   const reorderedRows = getReorderedTaskRows(taskRows, taskId, isCompleted);
 
   db.exec("BEGIN");
@@ -429,21 +583,23 @@ function reorderTaskScopeForCompletion(db, sectionKey, plannerEntryId, taskId, i
   }
 }
 
-function getTaskScopeRows(db, sectionKey, plannerEntryId) {
+function getTaskScopeRows(db, userId, sectionKey, plannerEntryId) {
   return plannerEntryId === null
     ? db.prepare(`
         SELECT id, completed, archived, position
         FROM tasks
         WHERE section_key = ?
           AND planner_entry_id IS NULL
+          AND user_id = ?
         ORDER BY position ASC, id DESC
-      `).all(sectionKey)
+      `).all(sectionKey, userId)
     : db.prepare(`
         SELECT id, completed, archived, position
         FROM tasks
         WHERE planner_entry_id = ?
+          AND user_id = ?
         ORDER BY position ASC, id DESC
-      `).all(plannerEntryId);
+      `).all(plannerEntryId, userId);
 }
 
 function getReorderedTaskScopeRows(taskRows, orderedTaskIds, visibleArchived) {
@@ -522,12 +678,13 @@ function getReorderedTaskRows(taskRows, taskId, isCompleted) {
   return remainingTasks;
 }
 
-function getPlannerEntryById(db, entryId) {
+function getPlannerEntryById(db, userId, entryId) {
   const plannerEntryRow = db.prepare(`
     SELECT id, section_key, name, archived, deleted, sort_key
     FROM planner_entries
     WHERE id = ?
-  `).get(entryId);
+      AND user_id = ?
+  `).get(entryId, userId);
 
   if (!plannerEntryRow) {
     return null;
@@ -543,12 +700,12 @@ function getPlannerEntryById(db, entryId) {
   return mapPlannerEntryRow(plannerEntryRow, taskRows.map(mapTaskRow));
 }
 
-function setActivePlannerEntry(db, sectionKey, entryId) {
+function setActivePlannerEntry(db, userId, sectionKey, entryId) {
   db.prepare(`
-    INSERT INTO planner_state (section_key, active_entry_id)
-    VALUES (?, ?)
-    ON CONFLICT(section_key) DO UPDATE SET active_entry_id = excluded.active_entry_id
-  `).run(sectionKey, entryId);
+    INSERT INTO planner_state (user_id, section_key, active_entry_id)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id, section_key) DO UPDATE SET active_entry_id = excluded.active_entry_id
+  `).run(userId, sectionKey, entryId);
 }
 
 function normalizePlannerEntryId(plannerEntryId) {
@@ -634,10 +791,12 @@ function mapTaskRow(row) {
 module.exports = {
   createPlannerEntry,
   createTask,
+  createUser,
   databasePath,
   deletePlannerEntry,
   deleteTask,
   getAppState,
+  getUserByInitials,
   openDatabase,
   reorderTasks,
   setPlannerSelection,

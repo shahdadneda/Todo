@@ -15,7 +15,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="../fonts.css?v=1" />
-    <link rel="stylesheet" href="./style.css?v=3" />
+    <link rel="stylesheet" href="./style.css?v=4" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -23,10 +23,42 @@
     <main class="page" id="main-content">
       <div class="page-top">
         <a class="back-link" href="../index.html">&larr;&nbsp;Home</a>
+        <div class="user-bar is-hidden" id="user-bar">
+          <span class="user-chip" id="user-chip" aria-label="Signed in initials"></span>
+          <button class="logout-button" id="logout-button" type="button">Log out</button>
+        </div>
       </div>
 
       <h1 class="sr-only">Shahdad's To-Do List</h1>
 
+      <section class="auth-card is-hidden" id="auth-card" aria-labelledby="auth-heading">
+        <h2 id="auth-heading">Sign in with your initials</h2>
+        <p class="auth-subtitle">
+          Two letters are your whole account &mdash; they're your passcode too.
+        </p>
+        <form class="auth-form" id="auth-form">
+          <label class="sr-only" for="auth-input">Your two-letter initials</label>
+          <input
+            id="auth-input"
+            name="initials"
+            type="text"
+            placeholder="AB"
+            maxlength="2"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            pattern="[A-Za-z]{2}"
+            aria-describedby="auth-message"
+          />
+          <div class="auth-actions">
+            <button class="auth-submit" id="auth-sign-in" type="submit">Sign in</button>
+            <button class="auth-create" id="auth-create" type="button">Create account</button>
+          </div>
+        </form>
+        <p class="auth-message" id="auth-message" aria-live="polite"></p>
+      </section>
+
+      <div class="app-shell is-hidden" id="app-shell">
       <nav class="section-nav" aria-label="Task sections">
         <button
           class="section-link is-active"
@@ -38,9 +70,6 @@
         </button>
         <button class="section-link" type="button" data-section="weekend-goals">
           Weekend Goals
-        </button>
-        <button class="section-link" type="button" data-section="ess-planner">
-          ESS planner
         </button>
       </nav>
 
@@ -108,14 +137,14 @@
                   aria-expanded="false"
                   aria-controls="planner-date-picker"
                 >
-                  New ESS Entry
+                  New Weekend Entry
                 </button>
 
                 <div
                   class="planner-date-picker is-hidden"
                   id="planner-date-picker"
                   role="dialog"
-                  aria-label="Choose an ESS entry date"
+                  aria-label="Choose a weekend entry date"
                   aria-hidden="true"
                 >
                   <div class="planner-date-picker-header">
@@ -170,8 +199,9 @@
           </aside>
         </div>
       </section>
+      </div>
     </main>
 
-    <script src="./script.js"></script>
+    <script src="./script.js?v=2"></script>
   </body>
 </html>

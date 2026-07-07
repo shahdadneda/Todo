@@ -1,7 +1,14 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  initials TEXT NOT NULL UNIQUE CHECK (length(initials) = 2),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS planner_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   section_key TEXT NOT NULL CHECK (section_key IN ('weekend-goals', 'ess-planner')),
   name TEXT NOT NULL,
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
@@ -15,13 +22,15 @@ CREATE INDEX IF NOT EXISTS idx_planner_entries_section_sort
 ON planner_entries (section_key, sort_key DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS planner_state (
-  section_key TEXT PRIMARY KEY CHECK (section_key IN ('weekend-goals', 'ess-planner')),
-  active_entry_id INTEGER,
-  FOREIGN KEY (active_entry_id) REFERENCES planner_entries(id) ON DELETE SET NULL
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  section_key TEXT NOT NULL CHECK (section_key IN ('weekend-goals', 'ess-planner')),
+  active_entry_id INTEGER REFERENCES planner_entries(id) ON DELETE SET NULL,
+  PRIMARY KEY (user_id, section_key)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   section_key TEXT NOT NULL CHECK (section_key IN ('general', 'weekend-goals', 'ess-planner')),
   planner_entry_id INTEGER,
   text TEXT NOT NULL,
