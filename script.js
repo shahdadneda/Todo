@@ -106,9 +106,11 @@ let isAppStatePollInFlight = false;
 let currentUserInitials = loadStoredUserInitials();
 let isAuthRequestPending = false;
 let authAvailabilityToken = 0;
+let knownAvailability = null;
 const authAvailabilityCache = new Map();
 
 renderAuthState();
+updateAuthButtonAvailability();
 
 if (currentUserInitials) {
   startApp();
@@ -719,13 +721,12 @@ async function submitAuthRequest(url, fallbackMessage) {
   const initials = authInput.value.trim().toUpperCase();
 
   if (!INITIALS_PATTERN.test(initials)) {
-    authMessage.textContent = "Enter exactly two letters.";
-    authInput.focus();
     return;
   }
 
   isAuthRequestPending = true;
-  setAuthControlsDisabled(true);
+  authInput.disabled = true;
+  updateAuthButtonAvailability();
   authMessage.textContent = "";
 
   try {
@@ -748,6 +749,7 @@ async function submitAuthRequest(url, fallbackMessage) {
 
     currentUserInitials = (data && data.initials) || initials;
     storeUserInitials(currentUserInitials);
+    authAvailabilityCache.set(currentUserInitials, true);
     authMessage.textContent = "";
     authInput.value = "";
     renderAuthState();
@@ -757,30 +759,25 @@ async function submitAuthRequest(url, fallbackMessage) {
     authMessage.textContent = "Could not reach the server. Please try again.";
   } finally {
     isAuthRequestPending = false;
-    setAuthControlsDisabled(false);
+    authInput.disabled = false;
+    updateAuthButtonAvailability();
   }
-}
-
-function setAuthControlsDisabled(isDisabled) {
-  authInput.disabled = isDisabled;
-  authSignInButton.disabled = isDisabled;
-  authCreateButton.disabled = isDisabled;
 }
 
 function refreshSignInReadiness() {
   const initials = authInput.value.trim().toUpperCase();
 
   if (!INITIALS_PATTERN.test(initials)) {
-    setAuthButtonsReady(null);
+    setKnownAvailability(null);
     return;
   }
 
   if (authAvailabilityCache.has(initials)) {
-    setAuthButtonsReady(authAvailabilityCache.get(initials));
+    setKnownAvailability(authAvailabilityCache.get(initials));
     return;
   }
 
-  setAuthButtonsReady(null);
+  setKnownAvailability(null);
   void checkInitialsAvailability(initials);
 }
 
@@ -805,16 +802,26 @@ async function checkInitialsAvailability(initials) {
     authAvailabilityCache.set(initials, data.exists);
 
     if (requestToken === authAvailabilityToken && authInput.value.trim().toUpperCase() === initials) {
-      setAuthButtonsReady(data.exists);
+      setKnownAvailability(data.exists);
     }
   } catch (error) {
-    // Network hiccup: leave both buttons dimmed. Clicking either still hits the real endpoint.
+    // Network hiccup: leave both buttons disabled. Retyping will try the check again.
   }
 }
 
-function setAuthButtonsReady(exists) {
-  authSignInButton.classList.toggle("is-ready", exists === true);
-  authCreateButton.classList.toggle("is-ready", exists === false);
+function setKnownAvailability(exists) {
+  knownAvailability = exists;
+  updateAuthButtonAvailability();
+}
+
+function updateAuthButtonAvailability() {
+  const canSignIn = !isAuthRequestPending && knownAvailability === true;
+  const canCreate = !isAuthRequestPending && knownAvailability === false;
+
+  authSignInButton.disabled = !canSignIn;
+  authSignInButton.classList.toggle("is-ready", canSignIn);
+  authCreateButton.disabled = !canCreate;
+  authCreateButton.classList.toggle("is-ready", canCreate);
 }
 
 function logOutUser(message) {
@@ -832,7 +839,7 @@ function logOutUser(message) {
   renderAuthState();
   authMessage.textContent = message || "";
   authInput.value = "";
-  setAuthButtonsReady(null);
+  setKnownAvailability(null);
   authInput.focus();
 }
 
