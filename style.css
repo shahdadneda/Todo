@@ -186,32 +186,46 @@ body {
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 
-.auth-submit {
-  border: 0;
-  color: var(--accent-contrast);
-  background: var(--accent);
+.auth-submit,
+.auth-create {
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+  opacity: 0.55;
 }
 
 .auth-submit:hover,
-.auth-submit:focus-visible {
-  background: var(--accent-strong);
-  outline: none;
-}
-
-.auth-create {
-  border: 1px solid var(--border);
-  color: var(--ink-soft);
-  background: var(--surface-muted);
-}
-
+.auth-submit:focus-visible,
 .auth-create:hover,
 .auth-create:focus-visible {
-  color: var(--ink);
-  background: var(--border);
+  color: var(--ink-soft);
+  opacity: 0.8;
   outline: none;
+}
+
+.auth-submit.is-ready,
+.auth-create.is-ready {
+  border-color: transparent;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  opacity: 1;
+}
+
+.auth-submit.is-ready:hover,
+.auth-submit.is-ready:focus-visible,
+.auth-create.is-ready:hover,
+.auth-create.is-ready:focus-visible {
+  color: var(--accent-contrast);
+  background: var(--accent-strong);
+  opacity: 1;
 }
 
 .auth-submit:active,

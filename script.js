@@ -105,6 +105,8 @@ let appStatePollIntervalId = null;
 let isAppStatePollInFlight = false;
 let currentUserInitials = loadStoredUserInitials();
 let isAuthRequestPending = false;
+let authAvailabilityToken = 0;
+const authAvailabilityCache = new Map();
 
 renderAuthState();
 
@@ -120,6 +122,8 @@ authInput.addEventListener("input", function () {
   if (authInput.value !== cleanedValue) {
     authInput.value = cleanedValue;
   }
+
+  refreshSignInReadiness();
 });
 
 authForm.addEventListener("submit", function (event) {
@@ -763,6 +767,56 @@ function setAuthControlsDisabled(isDisabled) {
   authCreateButton.disabled = isDisabled;
 }
 
+function refreshSignInReadiness() {
+  const initials = authInput.value.trim().toUpperCase();
+
+  if (!INITIALS_PATTERN.test(initials)) {
+    setAuthButtonsReady(null);
+    return;
+  }
+
+  if (authAvailabilityCache.has(initials)) {
+    setAuthButtonsReady(authAvailabilityCache.get(initials));
+    return;
+  }
+
+  setAuthButtonsReady(null);
+  void checkInitialsAvailability(initials);
+}
+
+async function checkInitialsAvailability(initials) {
+  const requestToken = ++authAvailabilityToken;
+
+  try {
+    const response = await fetch(`${USERS_API_URL}/${encodeURIComponent(initials)}`);
+
+    if (!response.ok) {
+      return;
+    }
+
+    const data = await response.json().catch(function () {
+      return null;
+    });
+
+    if (!data || typeof data.exists !== "boolean") {
+      return;
+    }
+
+    authAvailabilityCache.set(initials, data.exists);
+
+    if (requestToken === authAvailabilityToken && authInput.value.trim().toUpperCase() === initials) {
+      setAuthButtonsReady(data.exists);
+    }
+  } catch (error) {
+    // Network hiccup: leave both buttons dimmed. Clicking either still hits the real endpoint.
+  }
+}
+
+function setAuthButtonsReady(exists) {
+  authSignInButton.classList.toggle("is-ready", exists === true);
+  authCreateButton.classList.toggle("is-ready", exists === false);
+}
+
 function logOutUser(message) {
   currentUserInitials = "";
   clearStoredUserInitials();
@@ -778,6 +832,7 @@ function logOutUser(message) {
   renderAuthState();
   authMessage.textContent = message || "";
   authInput.value = "";
+  setAuthButtonsReady(null);
   authInput.focus();
 }
 

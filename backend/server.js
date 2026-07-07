@@ -119,6 +119,24 @@ app.post("/api/users", function (request, response) {
   }
 });
 
+app.get("/api/users/:initials", function (request, response) {
+  const initials = String(request.params.initials || "").trim().toUpperCase();
+
+  if (!/^[A-Z]{2}$/.test(initials)) {
+    response.status(400).json({
+      error: "Initials must be exactly two letters (A to Z)."
+    });
+    return;
+  }
+
+  const user = getUserByInitials(db, initials);
+
+  response.json({
+    initials: initials,
+    exists: Boolean(user)
+  });
+});
+
 app.post("/api/users/sign-in", function (request, response) {
   try {
     const rawInitials = (request.body || {}).initials;
