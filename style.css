@@ -156,7 +156,7 @@ body {
   text-indent: 0.35em;
   text-align: center;
   text-transform: uppercase;
-  caret-color: var(--accent);
+  caret-color: transparent;
   outline: none;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
